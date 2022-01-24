@@ -16,14 +16,14 @@ package kube
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pkg/errors"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/kanisterio/kanister/pkg/consts"
 	"github.com/kanisterio/kanister/pkg/field"
-	"github.com/kanisterio/kanister/pkg/log"
 )
 
 // PodRunner specifies Kubernetes Client and PodOptions needed for creating Pod
@@ -55,10 +55,11 @@ func (p *PodRunner) Run(ctx context.Context, fn func(context.Context, *v1.Pod) (
 	ctx = field.Context(ctx, consts.ContainerNameKey, pod.Spec.Containers[0].Name)
 	go func() {
 		<-ctx.Done()
-		err := DeletePod(context.Background(), p.cli, pod)
-		if err != nil {
-			log.WithError(err).Print("Failed to delete pod", field.M{"PodName": pod.Name})
-		}
+		fmt.Println("Skipping pod deletion: %s", pod.GetName())
+		//err := DeletePod(context.Background(), p.cli, pod)
+		//if err != nil {
+		//	log.WithError(err).Print("Failed to delete pod", field.M{"PodName": pod.Name})
+		//}
 	}()
 	return fn(ctx, pod)
 }
