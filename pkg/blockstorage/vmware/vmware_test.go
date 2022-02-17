@@ -11,7 +11,7 @@ import (
 
 	"github.com/kanisterio/kanister/pkg/blockstorage"
 	vapitags "github.com/vmware/govmomi/vapi/tags"
-	. "gopkg.in/check.v1"
+	_ "gopkg.in/check.v1"
 )
 
 func Test(t *testing.T) { TestingT(t) }

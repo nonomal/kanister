@@ -3,6 +3,7 @@ package vmware
 import (
 	"context"
 	"fmt"
+	types2 "github.com/vmware/govmomi/cns/types"
 	"net/url"
 	"os"
 	"strconv"
@@ -94,10 +95,16 @@ func NewProvider(config map[string]string) (blockstorage.Provider, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to login")
 	}
+
+	// The CNS Client will not work if the service version is not set to vsan here
+	_ = cli.UseServiceVersion("vsan")
+
 	cnsCli, err := cns.NewClient(ctx, cli)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to create CNS client")
 	}
+	// cnsCli.RoundTripper = flag.RoundTripper(c.Client) - probably skipable
+
 	vslmCli, err := vslm.NewClient(ctx, cli)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to create VSLM client")
@@ -185,8 +192,18 @@ func (p *FcdProvider) VolumeDelete(ctx context.Context, volume *blockstorage.Vol
 	return err
 }
 
+const referredEntityPVCKey = "cns.k8s.pv[1].referredEntity.pvc.name"
+
 // VolumeGet is part of blockstorage.Provider
 func (p *FcdProvider) VolumeGet(ctx context.Context, id string, zone string) (*blockstorage.Volume, error) {
+	if strings.Count(id, "-") > 4 {
+		var err error
+		id, err = p.getFCDIDForGuestClusterVolumeHandle(id)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	obj, err := p.Gom.Retrieve(ctx, vimID(id))
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to query the disk")
@@ -201,6 +218,33 @@ func (p *FcdProvider) VolumeGet(ctx context.Context, id string, zone string) (*b
 	}
 	vol.Tags = convertKeyValueToTags(kvs)
 	return vol, nil
+}
+
+func (p *FcdProvider) getFCDIDForGuestClusterVolumeHandle(id string) (string, error) {
+	// We detected a Supervisor Cluster PVC ID rather than a straight FCD ID.  We are in a Guest Cluster and need
+	// to map the Paravirtualized PV to an FCD.  The Paravirtualized PV points to a PVC in the Supervisor Cluster
+	// (the ID we received is the name of the PVC in Supervisor Cluster) and that points to a PV which points to
+	// the actual FCD.  Since we are in Guest Cluster we cannot just read the PV in Supervisor Cluster for the FCD ID.
+	// Instead, we will retrieve all volumes from CNS and look for the one that matches the PVC we want.
+	// TODO - fix this to use a proper query so we're not always retrieving all the volumes
+	// TODO - If we can't figure out the query, this code needs to be fixed to work for pagination
+	queryFilter := types2.CnsQueryFilter{}
+	qr, err := p.Cns.QueryVolume(context.Background(), queryFilter)
+	if err != nil {
+		return "", errors.Wrap(err, "Failed to retrieve the disk for guest cluster volume")
+	}
+	for _, checkVolume := range qr.Volumes {
+		for _, checkEntityMetadata := range checkVolume.Metadata.EntityMetadata {
+			checkK8sEntityMetadata, ok := checkEntityMetadata.(*types2.CnsKubernetesEntityMetadata)
+			if ok {
+				if checkK8sEntityMetadata.EntityType == string(types2.CnsKubernetesEntityTypePVC) &&
+					checkK8sEntityMetadata.EntityName == id {
+					return checkVolume.VolumeId.Id, nil
+				}
+			}
+		}
+	}
+	return "", errors.Errorf("Cannot convert Guest Cluster volume handle/Supervisor Cluster PVC name %s to FCDID", id)
 }
 
 // SnapshotCopy is part of blockstorage.Provider
