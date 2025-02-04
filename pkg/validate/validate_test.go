@@ -18,8 +18,8 @@ import (
 	"context"
 	"testing"
 
-	. "gopkg.in/check.v1"
-	v1 "k8s.io/api/core/v1"
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -31,46 +31,46 @@ import (
 )
 
 // Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) { TestingT(t) }
+func Test(t *testing.T) { check.TestingT(t) }
 
 type ValidateSuite struct{}
 
-var _ = Suite(&ValidateSuite{})
+var _ = check.Suite(&ValidateSuite{})
 
-func (s *ValidateSuite) TestActionSet(c *C) {
+func (s *ValidateSuite) TestActionSet(c *check.C) {
 	for _, tc := range []struct {
 		as      *crv1alpha1.ActionSet
-		checker Checker
+		checker check.Checker
 	}{
 		{
 			as:      &crv1alpha1.ActionSet{},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				Spec: &crv1alpha1.ActionSetSpec{},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec:       &crv1alpha1.ActionSetSpec{},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "ns1",
 								Kind: param.NamespaceKind,
 							},
 							ConfigMaps: map[string]crv1alpha1.ObjectReference{
-								"testCM": crv1alpha1.ObjectReference{
+								"testCM": {
 									Namespace: "ns2",
 								},
 							},
@@ -78,20 +78,20 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "ns1",
 								Kind: param.NamespaceKind,
 							},
 							ConfigMaps: map[string]crv1alpha1.ObjectReference{
-								"testCM": crv1alpha1.ObjectReference{
+								"testCM": {
 									Namespace: "ns1",
 								},
 							},
@@ -99,20 +99,20 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "ns1",
 								Kind: param.NamespaceKind,
 							},
 							Secrets: map[string]crv1alpha1.ObjectReference{
-								"testSecrets": crv1alpha1.ObjectReference{
+								"testSecrets": {
 									Namespace: "ns2",
 								},
 							},
@@ -120,20 +120,20 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "ns1",
 								Kind: param.NamespaceKind,
 							},
 							Secrets: map[string]crv1alpha1.ObjectReference{
-								"testSecrets": crv1alpha1.ObjectReference{
+								"testSecrets": {
 									Namespace: "ns1",
 								},
 							},
@@ -141,14 +141,14 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				Spec:   &crv1alpha1.ActionSetSpec{},
 				Status: &crv1alpha1.ActionSetStatus{},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
@@ -157,13 +157,13 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					State: crv1alpha1.StatePending,
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "ns1",
 								Kind: param.NamespaceKind,
@@ -175,34 +175,13 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					State: crv1alpha1.StatePending,
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			as: &crv1alpha1.ActionSet{
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
-							Object: crv1alpha1.ObjectReference{
-								Name: "ns1",
-								Kind: param.NamespaceKind,
-							},
-						},
-					},
-				},
-				Status: &crv1alpha1.ActionSetStatus{
-					State: crv1alpha1.StatePending,
-					Actions: []crv1alpha1.ActionStatus{
-						crv1alpha1.ActionStatus{},
-					},
-				},
-			},
-			checker: IsNil,
-		},
-		{
-			as: &crv1alpha1.ActionSet{
-				Spec: &crv1alpha1.ActionSetSpec{
-					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "ns1",
 								Kind: param.NamespaceKind,
@@ -213,11 +192,32 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 				Status: &crv1alpha1.ActionSetStatus{
 					State: crv1alpha1.StatePending,
 					Actions: []crv1alpha1.ActionStatus{
-						crv1alpha1.ActionStatus{},
+						{},
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
+		},
+		{
+			as: &crv1alpha1.ActionSet{
+				Spec: &crv1alpha1.ActionSetSpec{
+					Actions: []crv1alpha1.ActionSpec{
+						{
+							Object: crv1alpha1.ObjectReference{
+								Name: "ns1",
+								Kind: param.NamespaceKind,
+							},
+						},
+					},
+				},
+				Status: &crv1alpha1.ActionSetStatus{
+					State: crv1alpha1.StatePending,
+					Actions: []crv1alpha1.ActionStatus{
+						{},
+					},
+				},
+			},
+			checker: check.IsNil,
 		},
 		// NamespaceKind
 		{
@@ -225,7 +225,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "foo",
 								Kind: param.NamespaceKind,
@@ -234,7 +234,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		// StatefulSetKind
 		{
@@ -242,7 +242,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "foo",
 								Kind: param.StatefulSetKind,
@@ -251,7 +251,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		// DeploymentKind
 		{
@@ -259,7 +259,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "foo",
 								Kind: param.DeploymentKind,
@@ -268,7 +268,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		// PVCKind
 		{
@@ -276,7 +276,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "foo",
 								Kind: param.PVCKind,
@@ -285,7 +285,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		// Generic K8s resource (apiversion, resource missing)
 		{
@@ -293,7 +293,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name: "foo",
 								Kind: "unknown",
@@ -302,7 +302,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		// Generic K8s resource
 		{
@@ -310,7 +310,7 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{
+						{
 							Object: crv1alpha1.ObjectReference{
 								Name:       "foo",
 								APIVersion: "v1",
@@ -320,18 +320,18 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		}, // No object specified
 		{
 			as: &crv1alpha1.ActionSet{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns1"},
 				Spec: &crv1alpha1.ActionSetSpec{
 					Actions: []crv1alpha1.ActionSpec{
-						crv1alpha1.ActionSpec{},
+						{},
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 	} {
 		err := ActionSet(tc.as)
@@ -339,142 +339,142 @@ func (s *ValidateSuite) TestActionSet(c *C) {
 	}
 }
 
-func (s *ValidateSuite) TestActionSetStatus(c *C) {
+func (s *ValidateSuite) TestActionSetStatus(c *check.C) {
 	for _, tc := range []struct {
 		as      *crv1alpha1.ActionSetStatus
-		checker Checker
+		checker check.Checker
 	}{
 		{
 			as:      nil,
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as:      &crv1alpha1.ActionSetStatus{},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StatePending,
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StatePending,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{},
+					{},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StatePending,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{},
+					{},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StatePending,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{
+					{
 						Phases: []crv1alpha1.Phase{},
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StatePending,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{
+					{
 						Phases: []crv1alpha1.Phase{
-							crv1alpha1.Phase{},
+							{},
 						},
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StatePending,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{
+					{
 						Phases: []crv1alpha1.Phase{
-							crv1alpha1.Phase{},
+							{},
 						},
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StatePending,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{
+					{
 						Phases: []crv1alpha1.Phase{
-							crv1alpha1.Phase{
+							{
 								State: crv1alpha1.StatePending,
 							},
 						},
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StateFailed,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{
+					{
 						Phases: []crv1alpha1.Phase{
-							crv1alpha1.Phase{
+							{
 								State: crv1alpha1.StatePending,
 							},
 						},
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StateComplete,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{
+					{
 						Phases: []crv1alpha1.Phase{
-							crv1alpha1.Phase{
+							{
 								State: crv1alpha1.StatePending,
 							},
 						},
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			as: &crv1alpha1.ActionSetStatus{
 				State: crv1alpha1.StateComplete,
 				Actions: []crv1alpha1.ActionStatus{
-					crv1alpha1.ActionStatus{
+					{
 						Phases: []crv1alpha1.Phase{
-							crv1alpha1.Phase{
+							{
 								State: crv1alpha1.StatePending,
 							},
-							crv1alpha1.Phase{
+							{
 								State: crv1alpha1.StateComplete,
 							},
 						},
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 	} {
 		err := actionSetStatus(tc.as)
@@ -482,15 +482,15 @@ func (s *ValidateSuite) TestActionSetStatus(c *C) {
 	}
 }
 
-func (s *ValidateSuite) TestBlueprint(c *C) {
+func (s *ValidateSuite) TestBlueprint(c *check.C) {
 	err := Blueprint(nil)
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 }
 
-func (s *ValidateSuite) TestProfileSchema(c *C) {
+func (s *ValidateSuite) TestProfileSchema(c *check.C) {
 	tcs := []struct {
 		profile *crv1alpha1.Profile
-		checker Checker
+		checker check.Checker
 	}{
 		{
 			profile: &crv1alpha1.Profile{
@@ -505,7 +505,7 @@ func (s *ValidateSuite) TestProfileSchema(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			profile: &crv1alpha1.Profile{
@@ -524,7 +524,7 @@ func (s *ValidateSuite) TestProfileSchema(c *C) {
 					},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		// Missing secret namespace
 		{
@@ -539,7 +539,7 @@ func (s *ValidateSuite) TestProfileSchema(c *C) {
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		// Missing secret name
 		{
@@ -554,7 +554,7 @@ func (s *ValidateSuite) TestProfileSchema(c *C) {
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		// Missing secret field
 		{
@@ -573,7 +573,7 @@ func (s *ValidateSuite) TestProfileSchema(c *C) {
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		// Missing id field
 		{
@@ -592,7 +592,7 @@ func (s *ValidateSuite) TestProfileSchema(c *C) {
 					},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 	}
 
@@ -602,14 +602,14 @@ func (s *ValidateSuite) TestProfileSchema(c *C) {
 	}
 }
 
-func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
+func (s *ValidateSuite) TestOsSecretFromProfile(c *check.C) {
 	ctx := context.Background()
 	for i, tc := range []struct {
 		pType      objectstore.ProviderType
 		p          *crv1alpha1.Profile
 		cli        kubernetes.Interface
 		expected   *objectstore.Secret
-		errChecker Checker
+		errChecker check.Checker
 	}{
 		{
 			p: &crv1alpha1.Profile{
@@ -622,8 +622,8 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 				},
 			},
 			pType: objectstore.ProviderTypeAzure,
-			cli: fake.NewSimpleClientset(&v1.Secret{
-				Type: v1.SecretType(secrets.AzureSecretType),
+			cli: fake.NewSimpleClientset(&corev1.Secret{
+				Type: corev1.SecretType(secrets.AzureSecretType),
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "secname",
 					Namespace: "secnamespace",
@@ -642,7 +642,7 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 					EnvironmentName: "env",
 				},
 			},
-			errChecker: IsNil,
+			errChecker: check.IsNil,
 		},
 		{
 			p: &crv1alpha1.Profile{
@@ -659,8 +659,8 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 				},
 			},
 			pType: objectstore.ProviderTypeAzure,
-			cli: fake.NewSimpleClientset(&v1.Secret{
-				Type: v1.SecretType(secrets.AzureSecretType),
+			cli: fake.NewSimpleClientset(&corev1.Secret{
+				Type: corev1.SecretType(secrets.AzureSecretType),
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "secname",
 					Namespace: "secnamespace",
@@ -679,7 +679,7 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 					EnvironmentName: "",
 				},
 			},
-			errChecker: IsNil,
+			errChecker: check.IsNil,
 		},
 		{ // bad secret field err
 			p: &crv1alpha1.Profile{
@@ -696,8 +696,8 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 				},
 			},
 			pType: objectstore.ProviderTypeAzure,
-			cli: fake.NewSimpleClientset(&v1.Secret{
-				Type: v1.SecretType(secrets.AzureSecretType),
+			cli: fake.NewSimpleClientset(&corev1.Secret{
+				Type: corev1.SecretType(secrets.AzureSecretType),
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "secname",
 					Namespace: "secnamespace",
@@ -709,7 +709,7 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 				},
 			}),
 			expected:   nil,
-			errChecker: NotNil,
+			errChecker: check.NotNil,
 		},
 		{ // bad id field err
 			p: &crv1alpha1.Profile{
@@ -726,8 +726,8 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 				},
 			},
 			pType: objectstore.ProviderTypeAzure,
-			cli: fake.NewSimpleClientset(&v1.Secret{
-				Type: v1.SecretType(secrets.AzureSecretType),
+			cli: fake.NewSimpleClientset(&corev1.Secret{
+				Type: corev1.SecretType(secrets.AzureSecretType),
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "secname",
 					Namespace: "secnamespace",
@@ -739,7 +739,7 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 				},
 			}),
 			expected:   nil,
-			errChecker: NotNil,
+			errChecker: check.NotNil,
 		},
 		{ // missing secret
 			p: &crv1alpha1.Profile{
@@ -758,7 +758,7 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 			pType:      objectstore.ProviderTypeAzure,
 			cli:        fake.NewSimpleClientset(),
 			expected:   nil,
-			errChecker: NotNil,
+			errChecker: check.NotNil,
 		},
 		{ // missing keypair
 			p: &crv1alpha1.Profile{
@@ -770,7 +770,7 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 			pType:      objectstore.ProviderTypeAzure,
 			cli:        fake.NewSimpleClientset(),
 			expected:   nil,
-			errChecker: NotNil,
+			errChecker: check.NotNil,
 		},
 		{ // missing secret
 			p: &crv1alpha1.Profile{
@@ -785,11 +785,11 @@ func (s *ValidateSuite) TestOsSecretFromProfile(c *C) {
 			pType:      objectstore.ProviderTypeAzure,
 			cli:        fake.NewSimpleClientset(),
 			expected:   nil,
-			errChecker: NotNil,
+			errChecker: check.NotNil,
 		},
 	} {
 		secret, err := osSecretFromProfile(ctx, tc.pType, tc.p, tc.cli)
-		c.Check(secret, DeepEquals, tc.expected, Commentf("test number: %d", i))
+		c.Check(secret, check.DeepEquals, tc.expected, check.Commentf("test number: %d", i))
 		c.Check(err, tc.errChecker)
 	}
 }

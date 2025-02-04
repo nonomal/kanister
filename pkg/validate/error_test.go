@@ -17,15 +17,15 @@ package validate
 import (
 	"fmt"
 
-	"github.com/pkg/errors"
-	. "gopkg.in/check.v1"
+	"github.com/kanisterio/errkit"
+	"gopkg.in/check.v1"
 )
 
 type ErrorSuite struct{}
 
-var _ = Suite(&ErrorSuite{})
+var _ = check.Suite(&ErrorSuite{})
 
-func (s *ErrorSuite) TestIsError(c *C) {
+func (s *ErrorSuite) TestIsError(c *check.C) {
 	for _, tc := range []struct {
 		err error
 		is  bool
@@ -39,30 +39,30 @@ func (s *ErrorSuite) TestIsError(c *C) {
 			is:  false,
 		},
 		{
-			err: validateErr,
+			err: errValidate,
 			is:  true,
 		},
 		{
-			err: errors.Wrap(nil, "test"),
+			err: errkit.Wrap(nil, "test"),
 			is:  false,
 		},
 		{
-			err: errors.WithStack(nil),
+			err: errkit.WithStack(nil),
 			is:  false,
 		},
 		{
-			err: errors.Wrap(validateErr, "test"),
+			err: errkit.Wrap(errValidate, "test"),
 			is:  true,
 		},
 		{
-			err: errors.WithStack(validateErr),
+			err: errkit.WithStack(errValidate),
 			is:  true,
 		},
 		{
-			err: errors.New("test"),
+			err: errkit.New("test"),
 			is:  false,
 		},
 	} {
-		c.Check(IsError(tc.err), Equals, tc.is)
+		c.Check(IsError(tc.err), check.Equals, tc.is)
 	}
 }

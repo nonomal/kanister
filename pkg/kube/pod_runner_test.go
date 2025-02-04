@@ -17,36 +17,43 @@ package kube
 import (
 	"context"
 	"os"
+	"path"
 
-	. "gopkg.in/check.v1"
-	"k8s.io/api/core/v1"
+	"github.com/kanisterio/errkit"
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/testing"
+
+	"github.com/kanisterio/kanister/pkg/consts"
+	"github.com/kanisterio/kanister/pkg/field"
 )
 
 type PodRunnerTestSuite struct{}
 
-var _ = Suite(&PodRunnerTestSuite{})
+var _ = check.Suite(&PodRunnerTestSuite{})
 
 const (
 	podRunnerNS = "pod-runner-test"
+	podName     = "test-pod"
 )
 
-func (s *PodRunnerTestSuite) SetUpSuite(c *C) {
-	os.Setenv("POD_NAMESPACE", podRunnerNS)
+func (s *PodRunnerTestSuite) SetUpSuite(c *check.C) {
+	err := os.Setenv("POD_NAMESPACE", podRunnerNS)
+	c.Assert(err, check.IsNil)
 }
 
-func (s *PodRunnerTestSuite) TestPodRunnerContextCanceled(c *C) {
+func (s *PodRunnerTestSuite) TestPodRunnerContextCanceled(c *check.C) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cli := fake.NewSimpleClientset()
 	cli.PrependReactor("create", "pods", func(action testing.Action) (handled bool, ret runtime.Object, err error) {
 		return false, nil, nil
 	})
 	cli.PrependReactor("get", "pods", func(action testing.Action) (handled bool, ret runtime.Object, err error) {
-		p := &v1.Pod{
-			Status: v1.PodStatus{
-				Phase: v1.PodRunning,
+		p := &corev1.Pod{
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
 			},
 		}
 		return true, p, nil
@@ -59,11 +66,12 @@ func (s *PodRunnerTestSuite) TestPodRunnerContextCanceled(c *C) {
 	})
 	pr := NewPodRunner(cli, &PodOptions{
 		Namespace: podRunnerNS,
+		Name:      podName,
 	})
 	returned := make(chan struct{})
 	go func() {
 		_, err := pr.Run(ctx, makePodRunnerTestFunc(deleted))
-		c.Assert(err, IsNil)
+		c.Assert(err, check.IsNil)
 		close(returned)
 	}()
 	cancel()
@@ -71,9 +79,123 @@ func (s *PodRunnerTestSuite) TestPodRunnerContextCanceled(c *C) {
 	<-returned
 }
 
-func makePodRunnerTestFunc(deleted chan struct{}) func(ctx context.Context, pod *v1.Pod) (map[string]interface{}, error) {
-	return func(ctx context.Context, pod *v1.Pod) (map[string]interface{}, error) {
-		<-deleted
+func (s *PodRunnerTestSuite) TestPodRunnerForSuccessCase(c *check.C) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cli := fake.NewSimpleClientset()
+	cli.PrependReactor("create", "pods", func(action testing.Action) (handled bool, ret runtime.Object, err error) {
+		return false, nil, nil
+	})
+	cli.PrependReactor("get", "pods", func(action testing.Action) (handled bool, ret runtime.Object, err error) {
+		p := &corev1.Pod{
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+			},
+		}
+		return true, p, nil
+	})
+	deleted := make(chan struct{})
+	cli.PrependReactor("delete", "pods", func(action testing.Action) (handled bool, ret runtime.Object, err error) {
+		c.Log("Pod deleted due to Context Cancelled")
+		close(deleted)
+		return true, nil, nil
+	})
+	pr := NewPodRunner(cli, &PodOptions{
+		Namespace: podRunnerNS,
+		Name:      podName,
+		Command:   []string{"sh", "-c", "tail -f /dev/null"},
+	})
+	returned := make(chan struct{})
+	go func() {
+		_, err := pr.Run(ctx, makePodRunnerTestFunc(deleted))
+		c.Assert(err, check.IsNil)
+		close(returned)
+	}()
+	deleted <- struct{}{}
+	<-returned
+	cancel()
+}
+
+// TestPodRunnerWithDebugLabelForSuccessCase adds a debug entry into the context and verifies the
+// pod got created with corresponding label using the entry or not.
+func (s *PodRunnerTestSuite) TestPodRunnerWithDebugLabelForSuccessCase(c *check.C) {
+	jobIDSuffix := consts.LabelSuffixJobID
+	for _, tc := range []struct {
+		name            string
+		targetKey       string
+		contextKey      string
+		contextValue    string
+		isLabelExpected bool
+	}{
+		{
+			name:            "target key (kanister.io/JobID) present in pod labels",
+			targetKey:       path.Join(consts.LabelPrefix, jobIDSuffix),
+			contextKey:      path.Join(consts.LabelPrefix, jobIDSuffix),
+			contextValue:    "xyz123",
+			isLabelExpected: true,
+		},
+		{
+			name:            "target key (kanister.io/JobID) not present in pod labels",
+			targetKey:       path.Join(consts.LabelPrefix, jobIDSuffix),
+			contextKey:      path.Join(consts.LabelPrefix, "NonJobID"),
+			contextValue:    "some-other-value",
+			isLabelExpected: false,
+		},
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		ctx = field.Context(ctx, tc.contextKey, tc.contextValue)
+		cli := fake.NewSimpleClientset()
+		cli.PrependReactor("create", "pods", func(action testing.Action) (handled bool, ret runtime.Object, err error) {
+			return false, nil, nil
+		})
+		cli.PrependReactor("get", "pods", func(action testing.Action) (handled bool, ret runtime.Object, err error) {
+			p := &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+				},
+			}
+			return true, p, nil
+		})
+		po := &PodOptions{
+			Namespace: podRunnerNS,
+			Name:      podName,
+			Command:   []string{"sh", "-c", "tail -f /dev/null"},
+		}
+		deleted := make(chan struct{})
+		cli.PrependReactor("delete", "pods", func(action testing.Action) (handled bool, ret runtime.Object, err error) {
+			c.Log("Pod deleted due to Context Cancelled")
+			close(deleted)
+			return true, nil, nil
+		})
+		AddLabelsToPodOptionsFromContext(ctx, po, tc.targetKey)
+		pr := NewPodRunner(cli, po)
+		errorCh := make(chan error)
+		go func() {
+			_, err := pr.Run(ctx, afterPodRunTestKeyPresentFunc(tc.targetKey, tc.contextValue, tc.isLabelExpected, deleted))
+			errorCh <- err
+		}()
+		deleted <- struct{}{}
+		c.Assert(<-errorCh, check.IsNil)
+		cancel()
+	}
+}
+
+func makePodRunnerTestFunc(ch chan struct{}) func(ctx context.Context, pc PodController) (map[string]interface{}, error) {
+	return func(ctx context.Context, pc PodController) (map[string]interface{}, error) {
+		<-ch
+		return nil, nil
+	}
+}
+
+func afterPodRunTestKeyPresentFunc(labelKey, expectedLabelValue string, isLabelExpected bool, ch chan struct{}) func(ctx context.Context, pc PodController) (map[string]interface{}, error) {
+	return func(ctx context.Context, pc PodController) (map[string]interface{}, error) {
+		<-ch
+		labelValue, found := pc.Pod().Labels[labelKey]
+		if found != isLabelExpected {
+			return nil, errkit.New("Got different label than expected")
+		}
+		if isLabelExpected && labelValue != expectedLabelValue {
+			return nil, errkit.New("Found label doesn't match with expected label")
+		}
 		return nil, nil
 	}
 }

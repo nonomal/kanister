@@ -15,9 +15,12 @@
 package kanctl
 
 import (
-	kanister "github.com/kanisterio/kanister/pkg"
-	"github.com/pkg/errors"
+	"fmt"
+
+	"github.com/kanisterio/errkit"
 	"github.com/spf13/cobra"
+
+	kanister "github.com/kanisterio/kanister/pkg"
 )
 
 type validateParams struct {
@@ -42,9 +45,7 @@ func newValidateCommand() *cobra.Command {
 		Use:   "validate <resource>",
 		Short: "Validate custom Kanister resources",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return performValidation(cmd, args)
-		},
+		RunE:  performValidation,
 	}
 	cmd.Flags().String(nameFlag, "", "specify the K8s name of the custom resource to validate")
 	cmd.Flags().StringP(filenameFlag, "f", "", "yaml or json file of the custom resource to validate")
@@ -60,14 +61,15 @@ func performValidation(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	cmd.SilenceUsage = true
-
 	switch p.resourceKind {
 	case "profile":
 		return performProfileValidation(p)
 	case "blueprint":
 		return performBlueprintValidation(p)
+	case "repository-server-secrets":
+		return performRepoServerSecretsValidation(cmd.Context(), p)
 	default:
-		return errors.Errorf("resource %s is not supported for validate subcommand", p.resourceKind)
+		return errkit.New(fmt.Sprintf("resource %s is not supported for validate subcommand", p.resourceKind))
 	}
 }
 
@@ -79,7 +81,7 @@ func extractValidateParams(cmd *cobra.Command, args []string) (*validateParams, 
 	name, _ := cmd.Flags().GetString(nameFlag)
 	filename, _ := cmd.Flags().GetString(filenameFlag)
 	if name == "" && filename == "" {
-		return nil, errors.New("neither name nor filename specified")
+		return nil, errkit.New("neither name nor filename specified")
 	}
 	rns, _ := cmd.Flags().GetString(resourceNamespaceFlag)
 	schemaValidationOnly, _ := cmd.Flags().GetBool(schemaValidationOnlyFlag)

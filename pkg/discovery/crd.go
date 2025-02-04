@@ -17,18 +17,19 @@ package discovery
 import (
 	"context"
 
-	"github.com/kanisterio/kanister/pkg/filter"
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	crdclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/kanisterio/kanister/pkg/filter"
 )
 
 // CRDMatcher returns a ResourceTypeMatcher that matches all CRs in this cluster.
 func CRDMatcher(ctx context.Context, cli crdclient.Interface) (filter.ResourceTypeMatcher, error) {
 	crds, err := cli.ApiextensionsV1().CustomResourceDefinitions().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to query CRDs in cluster")
+		return nil, errkit.Wrap(err, "Failed to query CRDs in cluster")
 	}
 	return crdsToMatcher(crds.Items), nil
 }

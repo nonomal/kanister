@@ -17,14 +17,19 @@ package function
 import (
 	"context"
 	"encoding/json"
+	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	awsconfig "github.com/kanisterio/kanister/pkg/aws"
 	"github.com/kanisterio/kanister/pkg/blockstorage"
 	"github.com/kanisterio/kanister/pkg/blockstorage/getter"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -41,7 +46,9 @@ const (
 	WaitForSnapshotCompletionSnapshotsArg = "snapshots"
 )
 
-type waitForSnapshotCompletionFunc struct{}
+type waitForSnapshotCompletionFunc struct {
+	progressPercent string
+}
 
 func (*waitForSnapshotCompletionFunc) Name() string {
 	return WaitForSnapshotCompletionFuncName
@@ -55,7 +62,19 @@ func (*waitForSnapshotCompletionFunc) Arguments() []string {
 	return []string{WaitForSnapshotCompletionSnapshotsArg}
 }
 
-func (kef *waitForSnapshotCompletionFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (w *waitForSnapshotCompletionFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(w.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(w.RequiredArgs(), args)
+}
+
+func (w *waitForSnapshotCompletionFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	w.progressPercent = progress.StartedPercent
+	defer func() { w.progressPercent = progress.CompletedPercent }()
+
 	var snapshotinfo string
 	if err := Arg(args, WaitForSnapshotCompletionSnapshotsArg, &snapshotinfo); err != nil {
 		return nil, err
@@ -63,16 +82,24 @@ func (kef *waitForSnapshotCompletionFunc) Exec(ctx context.Context, tp param.Tem
 	return nil, waitForSnapshotsCompletion(ctx, snapshotinfo, tp.Profile, getter.New())
 }
 
+func (w *waitForSnapshotCompletionFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    w.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
+}
+
 func waitForSnapshotsCompletion(ctx context.Context, snapshotinfo string, profile *param.Profile, getter getter.Getter) error {
 	PVCData := []VolumeSnapshotInfo{}
 	err := json.Unmarshal([]byte(snapshotinfo), &PVCData)
 	if err != nil {
-		return errors.Wrapf(err, "Could not decode JSON data")
+		return errkit.Wrap(err, "Could not decode JSON data")
 	}
 
 	for _, pvcInfo := range PVCData {
 		if err = ValidateLocationForBlockstorage(profile, pvcInfo.Type); err != nil {
-			return errors.Wrap(err, "Profile validation failed")
+			return errkit.Wrap(err, "Profile validation failed")
 		}
 		config := getConfig(profile, pvcInfo.Type)
 		if pvcInfo.Type == blockstorage.TypeEBS {
@@ -81,14 +108,14 @@ func waitForSnapshotsCompletion(ctx context.Context, snapshotinfo string, profil
 
 		provider, err := getter.Get(pvcInfo.Type, config)
 		if err != nil {
-			return errors.Wrapf(err, "Could not get storage provider %v", pvcInfo.Type)
+			return errkit.Wrap(err, "Could not get storage provider", "provider", pvcInfo.Type)
 		}
 		snapshot, err := provider.SnapshotGet(ctx, pvcInfo.SnapshotID)
 		if err != nil {
-			return errors.Wrapf(err, "Failed to get Snapshot from Provider")
+			return errkit.Wrap(err, "Failed to get Snapshot from Provider")
 		}
 		if err = provider.SnapshotCreateWaitForCompletion(ctx, snapshot); err != nil {
-			return errors.Wrap(err, "Snapshot creation did not complete "+snapshot.ID)
+			return errkit.Wrap(err, "Snapshot creation did not complete "+snapshot.ID)
 		}
 	}
 	return nil

@@ -14,6 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+# include repository server's makefile
+include Makefile.kubebuilder
+
 # The binary to build (just the basename).
 BIN := controller
 
@@ -27,7 +31,7 @@ REGISTRY ?= kanisterio
 ARCH ?= amd64
 
 # This version-strategy uses git tags to set the version string
-VERSION := $(shell git describe --tags --always --dirty)
+VERSION ?= $(shell git describe --tags --always --dirty)
 #
 # This version-strategy uses a manual value to set the version string
 #VERSION := 1.2.3
@@ -37,12 +41,11 @@ PWD := $$(pwd)
 # Whether to build inside a containerized build environment
 DOCKER_BUILD ?= "true"
 
-DOCKER_CONFIG ?= "$(HOME)/.docker"
-
 # Mention the vm-driver that should be used to install OpenShift
 vm-driver ?= "kvm"
+
 # Default OCP version in which the OpenShift apps are going to run
-ocp_version ?= "4.9"
+ocp_version ?= "4.13"
 ###
 ### These variables should not need tweaking.
 ###
@@ -57,14 +60,19 @@ IMAGE_NAME := $(BIN)
 
 IMAGE := $(REGISTRY)/$(IMAGE_NAME)
 
-BUILD_IMAGE ?= ghcr.io/kanisterio/build:v0.0.18
-
-# tag 0.1.0 is, 0.0.1 (latest) + gh + aws + helm binary
-DOCS_BUILD_IMAGE ?= ghcr.io/kanisterio/docker-sphinx:0.2.0
-
 DOCS_RELEASE_BUCKET ?= s3://docs.kanister.io
 
 GITHUB_TOKEN ?= ""
+
+GOBORING ?= ""
+
+## Tool Versions
+
+CONTROLLER_TOOLS_VERSION ?= "v0.12.0"
+
+## Changelog file for goreleaser
+
+CHANGELOG_FILE ?= ./CHANGELOG_CURRENT.md
 
 # If you want to build all binaries, see the 'all-build' rule.
 # If you want to build all containers, see the 'all-container' rule.
@@ -89,37 +97,25 @@ all-push: $(addprefix push-, $(ALL_ARCH))
 build: bin/$(ARCH)/$(BIN)
 
 build-controller:
-	@$(MAKE) run CMD='-c " \
-	goreleaser build --id $(BIN) --rm-dist --debug --snapshot \
-	&& cp dist/$(BIN)_linux_$(ARCH)/$(BIN) bin/$(ARCH)/$(BIN) \
-	"'
+	@$(MAKE) run CMD=" \
+	GOOS=linux GOARCH=$(ARCH) goreleaser build --id $(BIN) --rm-dist --debug --snapshot --single-target \
+	&& cp dist/$(BIN)_linux_$(ARCH)*/$(BIN) bin/$(ARCH)/$(BIN) \
+	"
 
 bin/$(ARCH)/$(BIN):
 	@echo "building: $@"
-	@$(MAKE) run CMD='-c " \
+	@$(MAKE) run CMD=" \
 		GOARCH=$(ARCH)       \
 		VERSION=$(VERSION) \
 		PKG=$(PKG)         \
+		BIN=$(BIN) \
+		GOBORING=$(GOBORING) \
 		./build/build.sh   \
-	"'
+	"
 # Example: make shell CMD="-c 'date > datefile'"
 shell: build-dirs
 	@echo "launching a shell in the containerized build environment"
-	@docker run                                      \
-		-ti                                          \
-		--rm                                         \
-		--privileged                                 \
-		--net host                                   \
-		-v "$(PWD)/.go/pkg:/go/pkg"                  \
-		-v "$(PWD)/.go/cache:/go/.cache"             \
-		-v "${HOME}/.kube:/root/.kube"               \
-		-v "$(PWD):/go/src/$(PKG)"                   \
-		-v "$(PWD)/bin/$(ARCH):/go/bin"              \
-		-v "$(DOCKER_CONFIG):/root/.docker"          \
-		-v /var/run/docker.sock:/var/run/docker.sock \
-		-w /go/src/$(PKG)                            \
-		$(BUILD_IMAGE)                               \
-		/bin/sh
+	@PWD=$(PWD) ARCH=$(ARCH) PKG=$(PKG) GITHUB_TOKEN=$(GITHUB_TOKEN) CMD="/bin/bash $(CMD)" /bin/bash ./build/run_container.sh shell
 
 DOTFILE_IMAGE = $(subst :,_,$(subst /,_,$(IMAGE))-$(VERSION))
 
@@ -152,7 +148,7 @@ push-name:
 version:
 	@echo $(VERSION)
 
-.PHONY: deploy test codegen build-dirs run clean container-clean bin-clean docs start-kind tiller stop-kind release-snapshot go-mod-download
+.PHONY: deploy format-vet go-test test codegen build-dirs run clean container-clean bin-clean docs start-kind tiller stop-kind release-snapshot go-mod-download
 
 deploy: release-controller .deploy-$(DOTFILE_IMAGE)
 .deploy-$(DOTFILE_IMAGE):
@@ -162,41 +158,44 @@ deploy: release-controller .deploy-$(DOTFILE_IMAGE)
 		bundle.yaml.in > .deploy-$(DOTFILE_IMAGE)
 	@kubectl apply -f .deploy-$(DOTFILE_IMAGE)
 
-test: build-dirs
-	@$(MAKE) run CMD='-c "./build/test.sh $(SRC_DIRS)"'
+format-vet: build-dirs
+	@$(MAKE) run CMD="./build/format-vet.sh $(SRC_DIRS)"
+
+go-test: build-dirs
+	@$(MAKE) run CMD="TEST_FILTER=$(TEST_FILTER) ./build/test.sh $(SRC_DIRS)"
+
+test: format-vet go-test
 
 helm-test: build-dirs
-	@$(MAKE) run CMD='-c "./build/helm-test.sh $(SRC_DIRS)"'
+	@$(MAKE) run CMD="./build/helm-test.sh $(SRC_DIRS)"
 
 integration-test: build-dirs
-	@$(MAKE) run CMD='-c "./build/integration-test.sh short"'
+	@$(MAKE) run CMD="./build/integration-test.sh short"
 
 openshift-test:
 	@/bin/bash ./build/integration-test.sh openshift $(ocp_version)
 
 golint:
-	@$(MAKE) run CMD='-c "./build/golint.sh"'
+	@$(MAKE) run CMD="./build/golint.sh"
 
 codegen:
-	@$(MAKE) run CMD='-c "./build/codegen.sh"'
-
-DOCS_CMD = "cd docs && make clean &&          \
-                doc8 --max-line-length 90 --ignore D000 . && \
-                make spelling && make html           \
-	   "
+	@$(MAKE) run CMD="./build/codegen.sh"
 
 docs:
+	@$(MAKE) run BUILD_IMAGE="node:20-slim" CMD="VERSION=$(VERSION) ./build/build_docs.sh"
+
+API_DOCS_CMD = "gen-crd-api-reference-docs 			\
+		-config docs/api_docs/config.json 	\
+		-api-dir ./pkg/apis/cr/v1alpha1 	\
+		-template-dir docs/api_docs/template 		\
+		-out-file API.md"
+
+crd_docs:
 ifeq ($(DOCKER_BUILD),"true")
-	@echo "running DOCS_CMD in the containerized build environment"
-	@docker run             \
-		--entrypoint ''     \
-		--rm                \
-		-v "$(PWD):/repo"   \
-		-w /repo            \
-		$(DOCS_BUILD_IMAGE) \
-		/bin/bash -c $(DOCS_CMD)
+	@echo "running API_DOCS_CMD in the containerized build environment"
+	@PWD=$(PWD) ARCH=$(ARCH) CMD=$(API_DOCS_CMD) /bin/bash ./build/run_container.sh crd_docs
 else
-	@/bin/bash -c $(DOCS_CMD)
+	@/bin/bash -c $(API_DOCS_CMD)
 endif
 
 build-dirs:
@@ -206,23 +205,9 @@ build-dirs:
 run: build-dirs
 ifeq ($(DOCKER_BUILD),"true")
 	@echo "running CMD in the containerized build environment"
-	@docker run                                                     \
-		--rm                                                        \
-		--net host                                                  \
-		-e GITHUB_TOKEN=$(GITHUB_TOKEN)                             \
-		-v "${HOME}/.kube:/root/.kube"                              \
-		-v "$(PWD)/.go/pkg:/go/pkg"                                 \
-		-v "$(PWD)/.go/cache:/go/.cache"                            \
-		-v "$(PWD):/go/src/$(PKG)"                                  \
-		-v "$(PWD)/bin/$(ARCH):/go/bin"                             \
-		-v "$(PWD)/.go/std/$(ARCH):/usr/local/go/pkg/linux_$(ARCH)" \
-		-v "$(DOCKER_CONFIG):/root/.docker"                         \
-		-v /var/run/docker.sock:/var/run/docker.sock                \
-		-w /go/src/$(PKG)                                           \
-		$(BUILD_IMAGE)                                              \
-		/bin/bash $(CMD)
+	@PWD=$(PWD) ARCH=$(ARCH) PKG=$(PKG) GITHUB_TOKEN=$(GITHUB_TOKEN) CMD="$(CMD)" /bin/bash ./build/run_container.sh run
 else
-	@/bin/bash $(CMD)
+	@/bin/bash -c "$(CMD)"
 endif
 
 clean: dotfile-clean bin-clean
@@ -233,46 +218,32 @@ dotfile-clean:
 bin-clean:
 	rm -rf .go bin
 
-release-docs: docs
-	@if [ -z ${AWS_ACCESS_KEY_ID} ] || [ -z ${AWS_SECRET_ACCESS_KEY} ]; then\
-		echo "Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. Exiting.";\
-		exit 1;\
-	fi;\
-
-	@if [ -f "docs/_build/html/index.html" ]; then\
-		aws s3 sync docs/_build/html $(DOCS_RELEASE_BUCKET) --delete;\
-		echo "Success";\
-	else\
-		echo "No built docs found";\
-		exit 1;\
-	fi;\
-
-release-helm:
-	@/bin/bash ./build/release_helm.sh $(VERSION)
+package-helm:
+	@$(MAKE) run CMD="PACKAGE_FOLDER=${PACKAGE_FOLDER} HELM_RELEASE_REPO_URL=${HELM_RELEASE_REPO_URL} HELM_RELEASE_REPO_INDEX=${HELM_RELEASE_REPO_INDEX} ./build/package_helm.sh $(VERSION)"
 
 gorelease:
-	@$(MAKE) run CMD='-c "./build/gorelease.sh"'
+	@$(MAKE) run CMD="CHANGELOG_FILE=$(CHANGELOG_FILE) GORELEASE_PARAMS=${GORELEASE_PARAMS}  GHCR_LOGIN_TOKEN=${GHCR_LOGIN_TOKEN} GHCR_LOGIN_USER=${GHCR_LOGIN_USER} ./build/gorelease.sh"
 
 release-snapshot:
-	@$(MAKE) run CMD='-c "GORELEASER_CURRENT_TAG=v9.99.9-dev goreleaser --debug release --rm-dist --snapshot"'
+	@$(MAKE) run CMD="GORELEASER_CURRENT_TAG=v9.99.9-dev goreleaser --debug release --rm-dist --snapshot --timeout=60m0s"
 
 go-mod-download:
-	@$(MAKE) run CMD='-c "go mod download"'
+	@$(MAKE) run CMD="go mod download"
 
 start-kind:
-	@$(MAKE) run CMD='-c "./build/local_kubernetes.sh start_localkube"'
+	@$(MAKE) run CMD="./build/local_kubernetes.sh start_localkube"
 
 tiller:
 	@/bin/bash ./build/init_tiller.sh
 
 install-minio:
-	@$(MAKE) run CMD='-c "./build/minio.sh install_minio"'
+	@$(MAKE) run CMD="./build/minio.sh install_minio"
 
 install-csi-hostpath-driver:
-	@$(MAKE) run CMD='-c "./build/local_kubernetes.sh install_csi_hostpath_driver"'
+	@$(MAKE) run CMD="./build/local_kubernetes.sh install_csi_hostpath_driver"
 
 uninstall-minio:
-	@$(MAKE) run CMD='-c "./build/minio.sh uninstall_minio"'
+	@$(MAKE) run CMD="./build/minio.sh uninstall_minio"
 
 start-minishift:
 	@/bin/bash ./build/minishift.sh start_minishift $(vm-driver)
@@ -281,7 +252,29 @@ stop-minishift:
 	@/bin/bash ./build/minishift.sh stop_minishift
 
 stop-kind:
-	@$(MAKE) run CMD='-c "./build/local_kubernetes.sh stop_localkube"'
+	@$(MAKE) run CMD="./build/local_kubernetes.sh stop_localkube"
 
 check:
 	@./build/check.sh
+
+go-mod-tidy:
+	@$(MAKE) run CMD="./build/gomodtidy.sh"
+
+
+install-crds: ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+	@$(MAKE) run CMD="kubectl apply -f pkg/customresource/"
+
+uninstall-crds: ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
+	@$(MAKE) run CMD="kubectl delete -f pkg/customresource/"
+
+manifests: ## Generates CustomResourceDefinition objects.
+	@$(MAKE) run CMD="./build/generate_crds.sh ${CONTROLLER_TOOLS_VERSION}"
+
+reno-new:
+	@PWD=$(PWD) ARCH=$(ARCH) PKG=$(PKG) GITHUB_TOKEN=$(GITHUB_TOKEN) CMD="EDITOR=vim reno new $(note) --edit" /bin/bash ./build/run_container.sh shell
+
+reno-report:
+	@$(MAKE) run CMD="./build/reno_report.sh $(VERSION)"
+
+reno-lint:
+	@$(MAKE) run CMD="reno lint"

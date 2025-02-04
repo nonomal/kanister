@@ -11,11 +11,15 @@ actions:
           instanceID: "{{ .Phases.createSnapshot.Output.instanceID }}"
           securityGroupID: "{{ .Phases.createSnapshot.Output.securityGroupID }}"
           backupID: "{{ .Phases.exportSnapshot.Output.backupID }}"
+          dbSubnetGroup: "{{ .Phases.createSnapshot.Output.dbSubnetGroup }}"
     phases:
     - func: CreateRDSSnapshot
       name: createSnapshot
       args:
         instanceID: '{{ index .Object.data "postgres.instanceid" }}'
+        credentialsSource: secret
+        credentialsSecret: aws
+        region: '{{ .Options.region }}'
     - func: ExportRDSSnapshotToLocation
       name: exportSnapshot
       objects:
@@ -33,10 +37,17 @@ actions:
         databases: '{{ index .Object.data "postgres.databases" }}'
         snapshotID: "{{ .Phases.createSnapshot.Output.snapshotID }}"
         backupArtifactPrefix: test-postgresql-instance/postgres
+        dbSubnetGroup: "{{ .Phases.createSnapshot.Output.dbSubnetGroup }}"
+        credentialsSource: secret
+        credentialsSecret: aws
+        region: '{{ .Options.region }}'
     - func: DeleteRDSSnapshot
       name: deleteSnapshot
       args:
         snapshotID: "{{ .Phases.createSnapshot.Output.snapshotID }}"
+        credentialsSource: secret
+        credentialsSecret: aws
+        region: '{{ .Options.region }}'
   restore:
     inputArtifactNames:
     - backupInfo
@@ -57,14 +68,17 @@ actions:
         username: '{{ index .Phases.restoreSnapshots.Secrets.dbsecret.Data "username" | toString }}'
         password: '{{ index .Phases.restoreSnapshots.Secrets.dbsecret.Data "password" | toString }}'
         dbEngine: "PostgreSQL"
-
+        dbSubnetGroup: "{{ .ArtifactsIn.backupInfo.KeyValue.dbSubnetGroup }}"
+        credentialsSource: secret
+        credentialsSecret: aws
+        region: '{{ .Options.region }}'
   delete:
     phases:
     - func: KubeTask
       name: deleteBackup
       args:
         namespace: "{{ .Namespace.Name }}"
-        image: ghcr.io/kanisterio/kanister-tools:0.76.0
+        image: ghcr.io/kanisterio/kanister-tools:0.112.0
         command:
           - bash
           - -o

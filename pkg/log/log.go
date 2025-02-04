@@ -3,13 +3,14 @@ package log
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	"github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
 
 	"github.com/kanisterio/kanister/pkg/caller"
 	"github.com/kanisterio/kanister/pkg/config"
@@ -30,8 +31,12 @@ const (
 	// LevelVarName is the environment variable that controls
 	// init log levels
 	LevelEnvName = "LOG_LEVEL"
+)
 
-	redactString = "<*****>"
+var (
+	ErrEndpointNotSet = errkit.NewSentinelErr("fluentbit endpoint not set")
+	ErrNonTCPEndpoint = errkit.NewSentinelErr("fluentbit endpoint scheme must be tcp")
+	ErrPathSet        = errkit.NewSentinelErr("fluentbit endpoint path is set")
 )
 
 // OutputSink describes the current output sink.
@@ -67,18 +72,34 @@ func SetOutput(sink OutputSink) error {
 	case FluentbitSink:
 		fbitAddr, ok := os.LookupEnv(LoggingServiceHostEnv)
 		if !ok {
-			return errors.New("Unable to find Fluentbit host address")
+			return errkit.New("Unable to find Fluentbit host address")
 		}
 		fbitPort, ok := os.LookupEnv(LoggingServicePortEnv)
 		if !ok {
-			return errors.New("Unable to find Fluentbit logging port")
+			return errkit.New("Unable to find Fluentbit logging port")
 		}
 		hook := NewFluentbitHook(fbitAddr + ":" + fbitPort)
 		log.AddHook(hook)
 		return nil
 	default:
-		return errors.New("not implemented")
+		return errkit.New("not implemented")
 	}
+}
+
+// SetFluentbitOutput sets the fluentbit output
+func SetFluentbitOutput(url *url.URL) error {
+	if url == nil || url.Host == "" {
+		return ErrEndpointNotSet
+	}
+	if url.Scheme != "tcp" {
+		return ErrNonTCPEndpoint
+	}
+	if url.Path != "" {
+		return ErrPathSet
+	}
+	hook := NewFluentbitHook(url.Host)
+	log.AddHook(hook)
+	return nil
 }
 
 var envVarFields field.Fields
@@ -95,7 +116,11 @@ func initEnvVarFields() {
 			envVarFields = field.Add(envVarFields, strings.ToLower(e), ev)
 		}
 	}
+}
 
+// SetupClusterNameInLogVars sets up the `cluster_name` field in `envVarFields`
+// so that it can be printed with the logs.
+func SetupClusterNameInLogVars() {
 	if clsName, err := config.GetClusterName(nil); err == nil {
 		envVarFields = field.Add(envVarFields, "cluster_name", clsName)
 	}
@@ -167,6 +192,12 @@ func Print(msg string, fields ...field.M) {
 	Info().Print(msg, fields...)
 }
 
+// PrintTo works just like Print. It allows caller to specify the writer to use
+// to output the log.
+func PrintTo(w io.Writer, msg string, fields ...field.M) {
+	Info().PrintTo(w, msg, fields...)
+}
+
 func WithContext(ctx context.Context) Logger {
 	return Info().WithContext(ctx)
 }
@@ -176,15 +207,25 @@ func WithError(err error) Logger {
 }
 
 func (l *logger) Print(msg string, fields ...field.M) {
-	logFields := make(logrus.Fields)
+	entry := l.entry(fields...)
+	entry.Logln(logrus.Level(l.level), msg)
+}
 
+func (l *logger) PrintTo(w io.Writer, msg string, fields ...field.M) {
+	entry := l.entry(fields...)
+	entry.Logger.SetOutput(w)
+	entry.Logln(logrus.Level(l.level), msg)
+}
+
+func (l *logger) entry(fields ...field.M) *logrus.Entry {
+	logFields := make(logrus.Fields)
 	if envVarFields != nil {
 		for _, f := range envVarFields.Fields() {
 			logFields[f.Key()] = f.Value()
 		}
 	}
 
-	frame := caller.GetFrame(3)
+	frame := caller.GetFrame(4)
 	logFields["Function"] = frame.Function
 	logFields["File"] = frame.File
 	logFields["Line"] = frame.Line
@@ -201,11 +242,14 @@ func (l *logger) Print(msg string, fields ...field.M) {
 		}
 	}
 
-	entry := log.WithFields(logFields)
+	// use a cloned logger for this entry, so that any changes to this clone
+	// (e.g., via SetOutput()) will not affect the global logger.
+	cloned := cloneGlobalLogger()
+	entry := cloned.WithFields(logFields)
 	if l.err != nil {
 		entry = entry.WithError(l.err)
 	}
-	entry.Logln(logrus.Level(l.level), msg)
+	return entry
 }
 
 func (l *logger) WithContext(ctx context.Context) Logger {
@@ -240,19 +284,25 @@ func entryToJSON(entry *logrus.Entry) []byte {
 	return bytes
 }
 
-// SafeDumpPodObject redacts commands and args in Pod manifest to hide sensitive info,
-// converts Pod object into string and returns it
-func SafeDumpPodObject(pod *v1.Pod) string {
-	if pod == nil {
-		return ""
-	}
-	for i := range pod.Spec.Containers {
-		if pod.Spec.Containers[i].Command != nil {
-			pod.Spec.Containers[i].Command = []string{redactString}
+func cloneGlobalLogger() *logrus.Logger {
+	cloned := logrus.New()
+	cloned.SetFormatter(log.Formatter)
+	cloned.SetReportCaller(log.ReportCaller)
+	cloned.SetLevel(log.Level)
+	cloned.SetOutput(log.Out)
+	cloned.ExitFunc = log.ExitFunc
+
+	globalHooks := make(map[logrus.Hook]bool)
+
+	for _, hooks := range log.Hooks {
+		for _, hook := range hooks {
+			globalHooks[hook] = true
 		}
-		if pod.Spec.Containers[i].Args != nil {
-			pod.Spec.Containers[i].Args = []string{redactString}
-		}
 	}
-	return pod.String()
+
+	for hook := range globalHooks {
+		cloned.Hooks.Add(hook)
+	}
+
+	return cloned
 }

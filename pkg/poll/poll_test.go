@@ -17,22 +17,24 @@ package poll
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/jpillora/backoff"
-	. "gopkg.in/check.v1"
+	"github.com/kanisterio/errkit"
+	"gopkg.in/check.v1"
 )
 
 // Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) { TestingT(t) }
+func Test(t *testing.T) { check.TestingT(t) }
 
 type PollSuite struct{}
 
-var _ = Suite(&PollSuite{})
+var _ = check.Suite(&PollSuite{})
 
 type mockPollFunc struct {
-	c   *C
+	c   *check.C
 	res []pollFuncResult
 }
 
@@ -56,57 +58,57 @@ func (mpf *mockPollFunc) Run(ctx context.Context) (bool, error) {
 
 var errFake = fmt.Errorf("THIS IS FAKE")
 
-func (s *PollSuite) TestWaitWithBackoff(c *C) {
+func (s *PollSuite) TestWaitWithBackoff(c *check.C) {
 	for _, tc := range []struct {
 		f       mockPollFunc
-		checker Checker
+		checker check.Checker
 	}{
 		{
 			f: mockPollFunc{
 				c: c,
 				res: []pollFuncResult{
-					pollFuncResult{ok: true, err: nil},
+					{ok: true, err: nil},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			f: mockPollFunc{
 				c: c,
 				res: []pollFuncResult{
-					pollFuncResult{ok: false, err: errFake},
+					{ok: false, err: errFake},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			f: mockPollFunc{
 				c: c,
 				res: []pollFuncResult{
-					pollFuncResult{ok: true, err: errFake},
+					{ok: true, err: errFake},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 		{
 			f: mockPollFunc{
 				c: c,
 				res: []pollFuncResult{
-					pollFuncResult{ok: false, err: nil},
-					pollFuncResult{ok: true, err: nil},
+					{ok: false, err: nil},
+					{ok: true, err: nil},
 				},
 			},
-			checker: IsNil,
+			checker: check.IsNil,
 		},
 		{
 			f: mockPollFunc{
 				c: c,
 				res: []pollFuncResult{
-					pollFuncResult{ok: false, err: nil},
-					pollFuncResult{ok: true, err: errFake},
+					{ok: false, err: nil},
+					{ok: true, err: errFake},
 				},
 			},
-			checker: NotNil,
+			checker: check.NotNil,
 		},
 	} {
 		ctx := context.Background()
@@ -116,7 +118,7 @@ func (s *PollSuite) TestWaitWithBackoff(c *C) {
 	}
 }
 
-func (s *PollSuite) TestWaitWithBackoffCancellation(c *C) {
+func (s *PollSuite) TestWaitWithBackoffCancellation(c *check.C) {
 	f := func(context.Context) (bool, error) {
 		return false, nil
 	}
@@ -127,10 +129,34 @@ func (s *PollSuite) TestWaitWithBackoffCancellation(c *C) {
 
 	b := backoff.Backoff{}
 	err := WaitWithBackoff(ctx, b, f)
-	c.Check(err, NotNil)
+	c.Check(err, check.NotNil)
 }
 
-func (s *PollSuite) TestWaitWithBackoffBackoff(c *C) {
+func (s *PollSuite) TestWaitWithRetriesTimeout(c *check.C) {
+	// There's a better chance of catching a race condition
+	// if there is only one thread
+	maxprocs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(maxprocs)
+
+	f := func(context.Context) (bool, error) {
+		return false, errkit.New("retryable")
+	}
+	errf := func(err error) bool {
+		return err.Error() == "retryable"
+	}
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, time.Millisecond)
+	defer cancel()
+
+	backoff := backoff.Backoff{}
+	backoff.Min = 2 * time.Millisecond
+	err := WaitWithBackoffWithRetries(ctx, backoff, 10, errf, f)
+	c.Check(err, check.NotNil)
+	c.Assert(err.Error(), check.Matches, ".*context deadline exceeded*")
+}
+
+func (s *PollSuite) TestWaitWithBackoffBackoff(c *check.C) {
 	const numIterations = 10
 	i := 0
 	f := func(context.Context) (bool, error) {
@@ -148,6 +174,6 @@ func (s *PollSuite) TestWaitWithBackoffBackoff(c *C) {
 
 	now := time.Now()
 	err := WaitWithBackoff(ctx, b, f)
-	c.Assert(err, IsNil)
-	c.Assert(time.Since(now) > (numIterations-1)*time.Millisecond, Equals, true)
+	c.Assert(err, check.IsNil)
+	c.Assert(time.Since(now) > (numIterations-1)*time.Millisecond, check.Equals, true)
 }

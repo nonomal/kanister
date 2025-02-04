@@ -16,13 +16,18 @@ package function
 
 import (
 	"context"
+	"time"
 
 	v1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/kube/snapshot"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -59,13 +64,19 @@ const (
 	CreateCSISnapshotStaticOutputSnapshotContentName = "snapshotContent"
 )
 
-type createCSISnapshotStaticFunc struct{}
+type createCSISnapshotStaticFunc struct {
+	progressPercent string
+}
 
 func (*createCSISnapshotStaticFunc) Name() string {
 	return CreateCSISnapshotStaticFuncName
 }
 
-func (*createCSISnapshotStaticFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (c *createCSISnapshotStaticFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	c.progressPercent = progress.StartedPercent
+	defer func() { c.progressPercent = progress.CompletedPercent }()
+
 	var (
 		name, namespace                       string
 		driver, snapshotHandle, snapshotClass string
@@ -101,11 +112,7 @@ func (*createCSISnapshotStaticFunc) Exec(ctx context.Context, tp param.TemplateP
 		return nil, err
 	}
 
-	snapshotter, err := snapshot.NewSnapshotter(kubeCli, dynCli)
-	if err != nil {
-		return nil, err
-	}
-
+	snapshotter := snapshot.NewSnapshotter(kubeCli, dynCli)
 	// waitForReady is set to true by default because snapshot information is needed as output artifacts
 	waitForReady := true
 	vs, err := createCSISnapshotStatic(ctx, snapshotter, name, namespace, driver, snapshotHandle, snapshotClass, waitForReady)
@@ -141,6 +148,14 @@ func (*createCSISnapshotStaticFunc) Arguments() []string {
 	}
 }
 
+func (c *createCSISnapshotStaticFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(c.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(c.RequiredArgs(), args)
+}
+
 func createCSISnapshotStatic(
 	ctx context.Context,
 	snapshotter snapshot.Snapshotter,
@@ -152,9 +167,22 @@ func createCSISnapshotStatic(
 		Driver:                  driver,
 		VolumeSnapshotClassName: snapshotClass,
 	}
-	if err := snapshotter.CreateFromSource(ctx, source, name, namespace, wait); err != nil {
+	snapshotMeta := snapshot.ObjectMeta{
+		Name:      name,
+		Namespace: namespace,
+	}
+	snapshotContentMeta := snapshot.ObjectMeta{}
+	if err := snapshotter.CreateFromSource(ctx, source, wait, snapshotMeta, snapshotContentMeta); err != nil {
 		return nil, err
 	}
 
 	return snapshotter.Get(ctx, name, namespace)
+}
+
+func (c *createCSISnapshotStaticFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    c.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
 }

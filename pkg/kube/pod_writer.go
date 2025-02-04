@@ -19,22 +19,32 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/kanisterio/kanister/pkg/format"
 )
 
-// PodWriter specifies Kubernetes Client and the other params needed for writing content to a file
-type PodWriter struct {
+// PodWriter specifies interface needed for manipulating files in a pod
+type PodWriter interface {
+	// Write will create a new file(if not present) and write the provided content to the file
+	Write(ctx context.Context, namespace, podName, containerName string) error
+	// Remove will delete the file created by Write() func
+	Remove(ctx context.Context, namespace, podName, containerName string) error
+}
+
+// podWriter specifies Kubernetes Client and the other params needed for writing content to a file
+type podWriter struct {
 	cli     kubernetes.Interface
 	path    string
 	content io.Reader
 }
 
+var _ PodWriter = (*podWriter)(nil)
+
 // NewPodWriter returns a new PodWriter given Kubernetes Client, path of file and content
-func NewPodWriter(cli kubernetes.Interface, path string, content io.Reader) *PodWriter {
-	return &PodWriter{
+func NewPodWriter(cli kubernetes.Interface, path string, content io.Reader) PodWriter {
+	return &podWriter{
 		cli:     cli,
 		path:    filepath.Clean(path),
 		content: content,
@@ -42,19 +52,27 @@ func NewPodWriter(cli kubernetes.Interface, path string, content io.Reader) *Pod
 }
 
 // Write will create a new file(if not present) and write the provided content to the file
-func (p *PodWriter) Write(ctx context.Context, namespace, podName, containerName string) error {
-	cmd := []string{"sh", "-c", "cat - > " + p.path}
-	stdout, stderr, err := Exec(p.cli, namespace, podName, containerName, cmd, p.content)
+func (p *podWriter) Write(ctx context.Context, namespace, podName, containerName string) error {
+	cmd := []string{"sh", "-c", "cat - > " + p.path + " && :"}
+	stdout, stderr, err := Exec(ctx, p.cli, namespace, podName, containerName, cmd, p.content)
 	format.LogWithCtx(ctx, podName, containerName, stdout)
 	format.LogWithCtx(ctx, podName, containerName, stderr)
-	return errors.Wrap(err, "Failed to write contents to file")
+	if err != nil {
+		return errkit.Wrap(err, "Failed to write contents to file")
+	}
+
+	return nil
 }
 
 // Remove will delete the file created by Write() func
-func (p *PodWriter) Remove(ctx context.Context, namespace, podName, containerName string) error {
+func (p *podWriter) Remove(ctx context.Context, namespace, podName, containerName string) error {
 	cmd := []string{"sh", "-c", "rm " + p.path}
-	stdout, stderr, err := Exec(p.cli, namespace, podName, containerName, cmd, nil)
+	stdout, stderr, err := Exec(ctx, p.cli, namespace, podName, containerName, cmd, nil)
 	format.LogWithCtx(ctx, podName, containerName, stdout)
 	format.LogWithCtx(ctx, podName, containerName, stderr)
-	return errors.Wrap(err, "Failed to delete file")
+	if err != nil {
+		return errkit.Wrap(err, "Failed to delete file")
+	}
+
+	return nil
 }

@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pkg/errors"
-	uuid "github.com/satori/go.uuid"
+	uuid "github.com/gofrs/uuid"
+	"github.com/kanisterio/errkit"
 
 	"github.com/kanisterio/kanister/pkg/blockstorage"
 	"github.com/kanisterio/kanister/pkg/blockstorage/getter"
@@ -43,7 +43,7 @@ var _ getter.Getter = (*mockGetter)(nil)
 
 type mockGetter struct{}
 
-// NewGetter retuns a new mockGetter
+// NewGetter returns a new mockGetter
 func NewGetter() getter.Getter {
 	return &mockGetter{}
 }
@@ -55,17 +55,21 @@ func (*mockGetter) Get(storageType blockstorage.Type, config map[string]string) 
 	case blockstorage.TypeEBS:
 		fallthrough
 	case blockstorage.TypeGPD:
-		return Get(storageType), nil
+		return Get(storageType)
 	default:
-		return nil, errors.New("Get failed")
+		return nil, errkit.New("Get failed")
 	}
 }
 
 // Get returns a mock storage provider
-func Get(storageType blockstorage.Type) *Provider {
+func Get(storageType blockstorage.Type) (*Provider, error) {
+	volumeUUID, err := uuid.NewV1()
+	if err != nil {
+		return nil, errkit.Wrap(err, "Failed to create UUID")
+	}
 	volume := blockstorage.Volume{
 		Type:        storageType,
-		ID:          fmt.Sprintf("vol-%s", uuid.NewV1().String()),
+		ID:          fmt.Sprintf("vol-%s", volumeUUID.String()),
 		Az:          "AZ",
 		Encrypted:   false,
 		VolumeType:  "ssd",
@@ -78,9 +82,13 @@ func Get(storageType blockstorage.Type) *Provider {
 		CreationTime: blockstorage.TimeStamp(time.Time{}),
 	}
 	snapVol := volume
+	snapUUID, err := uuid.NewV1()
+	if err != nil {
+		return nil, errkit.Wrap(err, "Failed to create UUID")
+	}
 	snapshot := blockstorage.Snapshot{
 		Type:        storageType,
-		ID:          fmt.Sprintf("snap-%s", uuid.NewV1().String()),
+		ID:          fmt.Sprintf("snap-%s", snapUUID.String()),
 		SizeInBytes: 1024,
 		Tags: []*blockstorage.KeyValue{
 			{Key: "kanister.io/jobid", Value: "unittest"},
@@ -97,7 +105,7 @@ func Get(storageType blockstorage.Type) *Provider {
 		SnapIDList:        make([]string, 0),
 		DeletedSnapIDList: make([]string, 0),
 		VolIDList:         make([]string, 0),
-	}
+	}, nil
 }
 
 // Type mock
@@ -112,9 +120,13 @@ func (p *Provider) VolumeCreate(context.Context, blockstorage.Volume) (*blocksto
 
 // VolumeCreateFromSnapshot mock
 func (p *Provider) VolumeCreateFromSnapshot(ctx context.Context, snapshot blockstorage.Snapshot, tags map[string]string) (*blockstorage.Volume, error) {
+	volUUID, err := uuid.NewV1()
+	if err != nil {
+		return nil, errkit.Wrap(err, "Failed to create UUID")
+	}
 	vol := blockstorage.Volume{
 		Type:        snapshot.Type,
-		ID:          fmt.Sprintf("vol-%s", uuid.NewV1().String()),
+		ID:          fmt.Sprintf("vol-%s", volUUID.String()),
 		Az:          "AZ",
 		Encrypted:   false,
 		VolumeType:  "ssd",
@@ -185,7 +197,7 @@ func (p *Provider) SetTags(ctx context.Context, resource interface{}, tags map[s
 	case *blockstorage.Snapshot:
 		return nil
 	default:
-		return errors.Errorf("Unsupported resource type %v(%T)", res, res)
+		return errkit.New(fmt.Sprintf("Unsupported resource type %v(%T)", res, res))
 	}
 }
 

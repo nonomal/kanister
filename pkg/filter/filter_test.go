@@ -17,20 +17,20 @@ package filter
 import (
 	"testing"
 
-	. "gopkg.in/check.v1"
-	"k8s.io/api/core/v1"
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) { TestingT(t) }
+func Test(t *testing.T) { check.TestingT(t) }
 
 type FilterSuite struct{}
 
-var _ = Suite(&FilterSuite{})
+var _ = check.Suite(&FilterSuite{})
 
-func (s *FilterSuite) TestGVRRequirement(c *C) {
+func (s *FilterSuite) TestGVRRequirement(c *check.C) {
 	for _, tc := range []struct {
 		gvrr     ResourceTypeRequirement
 		gvr      schema.GroupVersionResource
@@ -135,20 +135,20 @@ func (s *FilterSuite) TestGVRRequirement(c *C) {
 			expected: false,
 		},
 	} {
-		c.Check(tc.gvrr.Matches(tc.gvr), Equals, tc.expected, Commentf("GVRR: %v, GVR: %v", tc.gvrr, tc.gvr))
+		c.Check(tc.gvrr.Matches(tc.gvr), check.Equals, tc.expected, check.Commentf("GVRR: %v, GVR: %v", tc.gvrr, tc.gvr))
 	}
 }
 
-func (s *FilterSuite) TestGroupVersionResourceEmpty(c *C) {
+func (s *FilterSuite) TestGroupVersionResourceEmpty(c *check.C) {
 	var g ResourceTypeMatcher
-	c.Assert(g.Empty(), Equals, true)
+	c.Assert(g.Empty(), check.Equals, true)
 	g = ResourceTypeMatcher{}
-	c.Assert(g.Empty(), Equals, true)
+	c.Assert(g.Empty(), check.Equals, true)
 	g = ResourceTypeMatcher{ResourceTypeRequirement{}}
-	c.Assert(g.Empty(), Equals, false)
+	c.Assert(g.Empty(), check.Equals, false)
 }
 
-func (s *FilterSuite) TestGroupVersionResourceAnyAll(c *C) {
+func (s *FilterSuite) TestGroupVersionResourceAnyAll(c *check.C) {
 	for _, tc := range []struct {
 		g   ResourceTypeMatcher
 		gvr schema.GroupVersionResource
@@ -211,12 +211,12 @@ func (s *FilterSuite) TestGroupVersionResourceAnyAll(c *C) {
 			all: false,
 		},
 	} {
-		c.Check(tc.g.Any(tc.gvr), Equals, tc.any)
-		c.Check(tc.g.All(tc.gvr), Equals, tc.all)
+		c.Check(tc.g.Any(tc.gvr), check.Equals, tc.any)
+		c.Check(tc.g.All(tc.gvr), check.Equals, tc.all)
 	}
 }
 
-func (s *FilterSuite) TestGroupVersionResourceIncludeExclude(c *C) {
+func (s *FilterSuite) TestGroupVersionResourceIncludeExclude(c *check.C) {
 	for _, tc := range []struct {
 		m       ResourceTypeMatcher
 		gvrs    GroupVersionResourceList
@@ -349,13 +349,75 @@ func (s *FilterSuite) TestGroupVersionResourceIncludeExclude(c *C) {
 				},
 			},
 		},
+		{
+			m: ResourceTypeMatcher{
+				ResourceTypeRequirement{
+					Group:    "core",
+					Resource: "myresource",
+				},
+			},
+			gvrs: []schema.GroupVersionResource{
+				{
+					Group:    "",
+					Resource: "myresource",
+				},
+				{
+					Group:    "core",
+					Resource: "myresource",
+				},
+				{
+					Group:    "mygroup",
+					Resource: "myresource",
+				},
+				{
+					Group:    "",
+					Resource: "yourresource",
+				},
+				{
+					Group:    "core",
+					Resource: "yourresource",
+				},
+				{
+					Group:    "mygroup",
+					Resource: "yourresource",
+				},
+			},
+			include: []schema.GroupVersionResource{
+				{
+					Group:    "",
+					Resource: "myresource",
+				},
+			},
+			exclude: []schema.GroupVersionResource{
+				{
+					Group:    "core",
+					Resource: "myresource",
+				},
+				{
+					Group:    "mygroup",
+					Resource: "myresource",
+				},
+				{
+					Group:    "",
+					Resource: "yourresource",
+				},
+				{
+					Group:    "core",
+					Resource: "yourresource",
+				},
+				{
+					Group:    "mygroup",
+					Resource: "yourresource",
+				},
+			},
+		},
 	} {
-		c.Check(tc.gvrs.Include(tc.m), DeepEquals, tc.include)
-		c.Check(tc.gvrs.Exclude(tc.m), DeepEquals, tc.exclude)
+		c.Check(tc.gvrs.Include(tc.m), check.DeepEquals, tc.include)
+		c.Check(tc.gvrs.Exclude(tc.m), check.DeepEquals, tc.exclude)
 	}
 }
 
-func (s *FilterSuite) TestJoin(c *C) {
+func (s *FilterSuite) TestJoin(c *check.C) {
 	for _, tc := range []struct {
 		m   []ResourceTypeMatcher
 		out ResourceTypeMatcher
@@ -369,11 +431,11 @@ func (s *FilterSuite) TestJoin(c *C) {
 			out: ResourceTypeMatcher{},
 		},
 	} {
-		c.Check(JoinResourceTypeMatchers(tc.m...), DeepEquals, tc.out)
+		c.Check(JoinResourceTypeMatchers(tc.m...), check.DeepEquals, tc.out)
 	}
 }
 
-func (s *FilterSuite) TestResourceIncludeExclude(c *C) {
+func (s *FilterSuite) TestResourceIncludeExclude(c *check.C) {
 	ssTypeRequirement := ResourceTypeRequirement{Group: "apps", Resource: "statefulsets"}
 	pvcTypeRequirement := ResourceTypeRequirement{Version: "v1", Resource: "persistentvolumeclaims"}
 	ss1 := Resource{Name: "ss1", GVR: schema.GroupVersionResource{Group: "apps", Resource: "statefulsets"},
@@ -441,7 +503,7 @@ func (s *FilterSuite) TestResourceIncludeExclude(c *C) {
 		{
 			// Match a specific resource
 			m: ResourceMatcher{
-				ResourceRequirement{LocalObjectReference: v1.LocalObjectReference{Name: "pvc1"}, ResourceTypeRequirement: pvcTypeRequirement},
+				ResourceRequirement{LocalObjectReference: corev1.LocalObjectReference{Name: "pvc1"}, ResourceTypeRequirement: pvcTypeRequirement},
 			},
 			resources: []Resource{ss1, ss2, pvc1, pvc2},
 			include:   []Resource{pvc1},
@@ -450,16 +512,16 @@ func (s *FilterSuite) TestResourceIncludeExclude(c *C) {
 		{
 			// Match a specific resource name only (no GVR), matches only one object
 			m: ResourceMatcher{
-				ResourceRequirement{LocalObjectReference: v1.LocalObjectReference{Name: "pvc1"}},
+				ResourceRequirement{LocalObjectReference: corev1.LocalObjectReference{Name: "pvc1"}},
 			},
 			resources: []Resource{ss1, ss2, pvc1, pvc2},
 			include:   []Resource{pvc1},
 			exclude:   []Resource{ss1, ss2, pvc2},
 		},
 		{
-			// Match a specific resource name only (no GVR), matches mulitple resources
+			// Match a specific resource name only (no GVR), matches multiple resources
 			m: ResourceMatcher{
-				ResourceRequirement{LocalObjectReference: v1.LocalObjectReference{Name: "specificname"}},
+				ResourceRequirement{LocalObjectReference: corev1.LocalObjectReference{Name: "specificname"}},
 			},
 			resources: []Resource{ss1, ss2, pvc1, pvc2},
 			include:   []Resource{ss2, pvc2},
@@ -468,7 +530,7 @@ func (s *FilterSuite) TestResourceIncludeExclude(c *C) {
 		{
 			// Match a specific resource name with different GVR, matches only one object
 			m: ResourceMatcher{
-				ResourceRequirement{LocalObjectReference: v1.LocalObjectReference{Name: "specificname"},
+				ResourceRequirement{LocalObjectReference: corev1.LocalObjectReference{Name: "specificname"},
 					ResourceTypeRequirement: ssTypeRequirement,
 				},
 			},
@@ -479,7 +541,7 @@ func (s *FilterSuite) TestResourceIncludeExclude(c *C) {
 		{
 			// Match by GVR and labels
 			m: ResourceMatcher{
-				ResourceRequirement{LocalObjectReference: v1.LocalObjectReference{Name: "specificname"},
+				ResourceRequirement{LocalObjectReference: corev1.LocalObjectReference{Name: "specificname"},
 					LabelSelector: metav1.LabelSelector{MatchLabels: map[string]string{
 						"testkey2": "testval2", // Include only the labels with 2
 					}}},
@@ -561,13 +623,13 @@ func (s *FilterSuite) TestResourceIncludeExclude(c *C) {
 			exclude:   []Resource{ss1, ss2, pvc1, pvc2},
 		},
 	} {
-		c.Check(tc.resources.Include(tc.m), DeepEquals, tc.include)
-		c.Check(tc.resources.Exclude(tc.m), DeepEquals, tc.exclude)
+		c.Check(tc.resources.Include(tc.m), check.DeepEquals, tc.include)
+		c.Check(tc.resources.Exclude(tc.m), check.DeepEquals, tc.exclude)
 	}
 }
 
-func (s *FilterSuite) TestResourceRequirementDeepCopyInto(c *C) {
-	rr := ResourceRequirement{LocalObjectReference: v1.LocalObjectReference{Name: "specificname"},
+func (s *FilterSuite) TestResourceRequirementDeepCopyInto(c *check.C) {
+	rr := ResourceRequirement{LocalObjectReference: corev1.LocalObjectReference{Name: "specificname"},
 		ResourceTypeRequirement: ResourceTypeRequirement{Group: "apps", Resource: "statefulsets"},
 		LabelSelector: metav1.LabelSelector{
 			MatchLabels: map[string]string{
@@ -583,12 +645,12 @@ func (s *FilterSuite) TestResourceRequirementDeepCopyInto(c *C) {
 	}
 	var rrCopy ResourceRequirement
 	rr.DeepCopyInto(&rrCopy)
-	c.Check(rr, DeepEquals, rrCopy)
+	c.Check(rr, check.DeepEquals, rrCopy)
 	// Change original and check again to be sure is not equals
 	rr.LocalObjectReference.Name = "newval"
-	c.Check(rr, Not(DeepEquals), rrCopy)
+	c.Check(rr, check.Not(check.DeepEquals), rrCopy)
 	rr.LocalObjectReference.Name = "specificname"
-	c.Check(rr, DeepEquals, rrCopy)
+	c.Check(rr, check.DeepEquals, rrCopy)
 	rr.ResourceTypeRequirement.Group = "newgroup"
-	c.Check(rr, Not(DeepEquals), rrCopy)
+	c.Check(rr, check.Not(check.DeepEquals), rrCopy)
 }

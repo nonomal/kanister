@@ -17,8 +17,8 @@ package function
 import (
 	"context"
 
-	. "gopkg.in/check.v1"
-	v1 "k8s.io/api/core/v1"
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -32,9 +32,9 @@ import (
 
 type CreateVolumeSnapshotTestSuite struct{}
 
-var _ = Suite(&CreateVolumeSnapshotTestSuite{})
+var _ = check.Suite(&CreateVolumeSnapshotTestSuite{})
 
-func (s *CreateVolumeSnapshotTestSuite) TestGetPVCInfo(c *C) {
+func (s *CreateVolumeSnapshotTestSuite) TestGetPVCInfo(c *check.C) {
 	ctx := context.Background()
 	ns := "ns"
 	mockGetter := mockblockstorage.NewGetter()
@@ -54,85 +54,85 @@ func (s *CreateVolumeSnapshotTestSuite) TestGetPVCInfo(c *C) {
 		},
 	}
 	cli := fake.NewSimpleClientset(
-		&v1.PersistentVolumeClaim{
+		&corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "pvc-test-1",
 				Namespace: ns,
 			},
-			Spec: v1.PersistentVolumeClaimSpec{
+			Spec: corev1.PersistentVolumeClaimSpec{
 				VolumeName: "pv-test-1",
 			},
 		},
-		&v1.PersistentVolume{
+		&corev1.PersistentVolume{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "pv-test-1",
 				Labels: map[string]string{
-					kube.FDZoneLabelName:   "us-west-2a",
-					kube.FDRegionLabelName: "us-west-2",
+					kube.TopologyZoneLabelName:   "us-west-2a",
+					kube.TopologyRegionLabelName: "us-west-2",
 				},
 			},
-			Spec: v1.PersistentVolumeSpec{
-				Capacity: v1.ResourceList{
-					v1.ResourceName(v1.ResourceStorage): k8sresource.MustParse("1Gi"),
+			Spec: corev1.PersistentVolumeSpec{
+				Capacity: corev1.ResourceList{
+					corev1.ResourceName(corev1.ResourceStorage): k8sresource.MustParse("1Gi"),
 				},
-				PersistentVolumeSource: v1.PersistentVolumeSource{
-					AWSElasticBlockStore: &v1.AWSElasticBlockStoreVolumeSource{
+				PersistentVolumeSource: corev1.PersistentVolumeSource{
+					AWSElasticBlockStore: &corev1.AWSElasticBlockStoreVolumeSource{
 						VolumeID: "vol-abc123",
 					},
 				},
 			},
 		},
-		&v1.PersistentVolumeClaim{
+		&corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "pvc-test-2",
 				Namespace: ns,
 			},
-			Spec: v1.PersistentVolumeClaimSpec{
+			Spec: corev1.PersistentVolumeClaimSpec{
 				VolumeName: "pv-test-2",
 			},
 		},
-		&v1.PersistentVolume{
+		&corev1.PersistentVolume{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "pv-test-2",
 			},
-			Spec: v1.PersistentVolumeSpec{
-				Capacity: v1.ResourceList{
-					v1.ResourceName(v1.ResourceStorage): k8sresource.MustParse("1Gi"),
+			Spec: corev1.PersistentVolumeSpec{
+				Capacity: corev1.ResourceList{
+					corev1.ResourceName(corev1.ResourceStorage): k8sresource.MustParse("1Gi"),
 				},
-				PersistentVolumeSource: v1.PersistentVolumeSource{
-					AWSElasticBlockStore: &v1.AWSElasticBlockStoreVolumeSource{
+				PersistentVolumeSource: corev1.PersistentVolumeSource{
+					AWSElasticBlockStore: &corev1.AWSElasticBlockStoreVolumeSource{
 						VolumeID: "vol-abc123",
 					},
 				},
 			},
 		},
-		&v1.PersistentVolumeClaim{
+		&corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "pvc-test-3",
 				Namespace: ns,
 			},
-			Spec: v1.PersistentVolumeClaimSpec{
+			Spec: corev1.PersistentVolumeClaimSpec{
 				VolumeName: "pv-test-3",
 			},
 		},
-		&v1.PersistentVolume{
+		&corev1.PersistentVolume{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "pv-test-3",
 				Labels: map[string]string{
-					kube.FDZoneLabelName: "us-west-2a",
+					kube.TopologyZoneLabelName: "us-west-2a",
 				},
 			},
-			Spec: v1.PersistentVolumeSpec{
-				Capacity: v1.ResourceList{
-					v1.ResourceName(v1.ResourceStorage): k8sresource.MustParse("1Gi"),
+			Spec: corev1.PersistentVolumeSpec{
+				Capacity: corev1.ResourceList{
+					corev1.ResourceName(corev1.ResourceStorage): k8sresource.MustParse("1Gi"),
 				},
 			},
 		},
 	)
 	_, err := cli.CoreV1().PersistentVolumeClaims(ns).Get(ctx, "pvc-test-1", metav1.GetOptions{})
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 	_, err = cli.CoreV1().PersistentVolumes().Get(ctx, "pv-test-1", metav1.GetOptions{})
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 
 	for _, tc := range []struct {
 		pvc          string
@@ -142,7 +142,7 @@ func (s *CreateVolumeSnapshotTestSuite) TestGetPVCInfo(c *C) {
 		wantPVC      string
 		wantSize     int64
 		wantRegion   string
-		check        Checker
+		check        check.Checker
 	}{
 		{
 			pvc:          "pvc-test-1",
@@ -152,28 +152,28 @@ func (s *CreateVolumeSnapshotTestSuite) TestGetPVCInfo(c *C) {
 			wantPVC:      "pvc-test-1",
 			wantSize:     int64(1073741824),
 			wantRegion:   "us-west-2",
-			check:        IsNil,
+			check:        check.IsNil,
 		},
 		{
 			pvc:   "pvc-test-2",
-			check: NotNil,
+			check: check.NotNil,
 		},
 		{
 			pvc:   "pvc-test-3",
-			check: NotNil,
+			check: check.NotNil,
 		},
 	} {
 		volInfo, err := getPVCInfo(ctx, cli, ns, tc.pvc, tp, mockGetter)
 		c.Assert(err, tc.check)
-		c.Assert(volInfo, Not(Equals), tc.check)
+		c.Assert(volInfo, check.Not(check.Equals), tc.check)
 		if err != nil {
 			continue
 		}
-		c.Assert(volInfo.volumeID, Equals, tc.wantVolumeID)
-		c.Assert(volInfo.sType, Equals, tc.wantType)
-		c.Assert(volInfo.volZone, Equals, tc.wantVolZone)
-		c.Assert(volInfo.pvc, Equals, tc.wantPVC)
-		c.Assert(volInfo.size, Equals, tc.wantSize)
-		c.Assert(volInfo.region, Equals, tc.wantRegion)
+		c.Assert(volInfo.volumeID, check.Equals, tc.wantVolumeID)
+		c.Assert(volInfo.sType, check.Equals, tc.wantType)
+		c.Assert(volInfo.volZone, check.Equals, tc.wantVolZone)
+		c.Assert(volInfo.pvc, check.Equals, tc.wantPVC)
+		c.Assert(volInfo.size, check.Equals, tc.wantSize)
+		c.Assert(volInfo.region, check.Equals, tc.wantRegion)
 	}
 }

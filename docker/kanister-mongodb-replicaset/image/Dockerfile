@@ -1,13 +1,12 @@
 FROM mongo:3.6
-LABEL maintainer="Tom Manville <tom@kasten.io>"
+LABEL maintainer="Kanister maintainers <kanister.maintainers@veeam.com>"
 
 USER root
 
-ADD ./docker/kanister-mongodb-replicaset/image /kanister
+ADD . /kanister
 
 RUN /kanister/install.sh && rm -rf /kanister && rm -rf /tmp && mkdir /tmp
 
-COPY --from=restic/restic:0.11.0 /usr/bin/restic /usr/local/bin/restic
-ADD kando /usr/local/bin/
+COPY --from=restic/restic:0.16.4 /usr/bin/restic /usr/local/bin/restic
 
 CMD ["tail", "-f", "/dev/null"]

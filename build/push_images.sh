@@ -18,10 +18,26 @@ set -o errexit
 set -o nounset
 
 IMAGE_REGISTRY="ghcr.io/kanisterio"
-IMAGES=("mysql-sidecar" "kafka-adobe-s3-sink-connector" "postgres-kanister-tools" "postgresql" "postgres-tools-9.6" "cassandra" "kanister-kubectl-1.18" "mongo-sidecar" "mongodb" "es-sidecar" "controller" "kanister-tools" "couchbase-tools" "kafka-adobe-s3-source-connector" "foundationdb" "mssql-tools")
+
+PUBLISHED_IMAGES_NAME_PATH="build/published_images.json"
 
 TAG=${1:-"v9.99.9-dev"}
 
-for i in ${IMAGES[@]}; do
-   docker push $IMAGE_REGISTRY/$i:$TAG
-done
+COMMIT_SHA_TAG=commit-${COMMIT_SHA:?"COMMIT_SHA is required"}
+SHORT_COMMIT_SHA_TAG=short-commit-${COMMIT_SHA::12}
+
+push_images() {
+   images_file_path=$1
+
+   images=$(jq -r .images[] "${images_file_path}")
+
+   for i in ${images[@]}; do
+      docker tag $IMAGE_REGISTRY/$i:$TAG $IMAGE_REGISTRY/$i:$COMMIT_SHA_TAG
+      docker tag $IMAGE_REGISTRY/$i:$TAG $IMAGE_REGISTRY/$i:$SHORT_COMMIT_SHA_TAG
+      docker push $IMAGE_REGISTRY/$i:$TAG
+      docker push $IMAGE_REGISTRY/$i:$COMMIT_SHA_TAG
+      docker push $IMAGE_REGISTRY/$i:$SHORT_COMMIT_SHA_TAG
+   done
+}
+
+push_images $PUBLISHED_IMAGES_NAME_PATH

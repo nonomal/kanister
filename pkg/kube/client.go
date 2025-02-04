@@ -15,18 +15,14 @@
 package kube
 
 import (
-	"os"
-
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	crdclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes" // Load the GCP plugin - required to authenticate against
-
-	// GKE clusters
-	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
-	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
 func newClientConfig() clientcmd.ClientConfig {
@@ -41,26 +37,13 @@ func ConfigNamespace() (string, error) {
 	cc := newClientConfig()
 	ns, _, err := cc.Namespace()
 	if err != nil {
-		return "", errors.Wrap(err, "Could not get namespace from config")
+		return "", errkit.Wrap(err, "Could not get namespace from config")
 	}
 	return ns, nil
 }
 
 // LoadConfig returns a kubernetes client config based on global settings.
 func LoadConfig() (*rest.Config, error) {
-	kubeConfigEnv := os.Getenv(clientcmd.RecommendedConfigPathEnvVar)
-	if len(kubeConfigEnv) != 0 {
-		return clientcmd.BuildConfigFromFlags("", kubeConfigEnv)
-	}
-
-	if c, err := clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile); err == nil {
-		return c, nil
-	}
-
-	if c, err := rest.InClusterConfig(); err == nil {
-		return c, nil
-	}
-
 	return newClientConfig().ClientConfig()
 }
 

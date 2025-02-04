@@ -18,11 +18,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
-	"github.com/ghodss/yaml"
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"sigs.k8s.io/yaml"
 
 	kanister "github.com/kanisterio/kanister/pkg"
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
@@ -32,6 +35,8 @@ import (
 	"github.com/kanisterio/kanister/pkg/log"
 	"github.com/kanisterio/kanister/pkg/param"
 	"github.com/kanisterio/kanister/pkg/postgres"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -54,16 +59,20 @@ const (
 	ExportRDSSnapshotToLocDatabasesArg       = "databases"
 	ExportRDSSnapshotToLocSecGrpIDArg        = "securityGroupID"
 	ExportRDSSnapshotToLocBackupID           = "backupID"
+	ExportRDSSnapshotToLocDBSubnetGroupArg   = "dbSubnetGroup"
+	ExportRDSSnapshotToLocImageArg           = "image"
 
 	PostgrSQLEngine RDSDBEngine = "PostgreSQL"
 
 	BackupAction  RDSAction = "backup"
 	RestoreAction RDSAction = "restore"
 
-	postgresToolsImage = "ghcr.io/kanisterio/postgres-kanister-tools:0.76.0"
+	defaultPostgresToolsImage = "ghcr.io/kanisterio/postgres-kanister-tools:0.112.0"
 )
 
-type exportRDSSnapshotToLocationFunc struct{}
+type exportRDSSnapshotToLocationFunc struct {
+	progressPercent string
+}
 
 // RDSDBEngine for RDS Engine types
 type RDSDBEngine string
@@ -75,21 +84,39 @@ func (*exportRDSSnapshotToLocationFunc) Name() string {
 	return ExportRDSSnapshotToLocFuncName
 }
 
-func exportRDSSnapshotToLoc(ctx context.Context, namespace, instanceID, snapshotID, username, password string, databases []string, backupPrefix string, dbEngine RDSDBEngine, sgIDs []string, profile *param.Profile) (map[string]interface{}, error) {
+func exportRDSSnapshotToLoc(
+	ctx context.Context,
+	namespace,
+	instanceID,
+	snapshotID,
+	username,
+	password string,
+	databases []string,
+	dbSubnetGroup,
+	backupPrefix string,
+	dbEngine RDSDBEngine,
+	sgIDs []string,
+	credentialsSource awsCredentialsSource,
+	tp param.TemplateParams,
+	postgresToolsImage string,
+	annotations,
+	labels map[string]string,
+) (map[string]interface{}, error) {
+	profile := tp.Profile
 	// Validate profilextractDumpFromDBe
 	if err := ValidateProfile(profile); err != nil {
-		return nil, errors.Wrap(err, "Profile Validation failed")
+		return nil, errkit.Wrap(err, "Profile Validation failed")
 	}
 
-	awsConfig, region, err := getAWSConfigFromProfile(ctx, profile)
+	awsConfig, region, err := getAwsConfig(ctx, credentialsSource, tp)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get AWS creds from profile")
+		return nil, errkit.Wrap(err, "Failed to get AWS creds")
 	}
 
 	// Create rds client
 	rdsCli, err := rds.NewClient(ctx, awsConfig, region)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to create RDS client")
+		return nil, errkit.Wrap(err, "Failed to create RDS client")
 	}
 
 	// Create tmp instance from the snapshot
@@ -99,14 +126,14 @@ func exportRDSSnapshotToLoc(ctx context.Context, namespace, instanceID, snapshot
 	if sgIDs == nil {
 		sgIDs, err = findSecurityGroups(ctx, rdsCli, instanceID)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Failed to fetch security group ids. InstanceID=%s", instanceID)
+			return nil, errkit.Wrap(err, "Failed to fetch security group ids. InstanceID=", "instanceID=", instanceID)
 		}
 	}
 
 	log.WithContext(ctx).Print("Spin up temporary RDS instance from the snapshot.", field.M{"SnapshotID": snapshotID, "InstanceID": tmpInstanceID})
 	// Create tmp instance from snapshot
-	if err := restoreFromSnapshot(ctx, rdsCli, tmpInstanceID, snapshotID, sgIDs); err != nil {
-		return nil, errors.Wrapf(err, "Failed to restore snapshot. SnapshotID=%s", snapshotID)
+	if err := restoreFromSnapshot(ctx, rdsCli, tmpInstanceID, dbSubnetGroup, snapshotID, sgIDs); err != nil {
+		return nil, errkit.Wrap(err, "Failed to restore snapshot. SnapshotID=", "snapshotID=", snapshotID)
 	}
 	defer func() {
 		if err := cleanupRDSDB(ctx, rdsCli, tmpInstanceID); err != nil {
@@ -117,7 +144,7 @@ func exportRDSSnapshotToLoc(ctx context.Context, namespace, instanceID, snapshot
 	// Find host of the instance
 	dbEndpoint, err := findRDSEndpoint(ctx, rdsCli, tmpInstanceID)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Couldn't find endpoint for instance %s", tmpInstanceID)
+		return nil, errkit.Wrap(err, "Couldn't find endpoint for instance", "instance", tmpInstanceID)
 	}
 
 	// Create unique backupID
@@ -126,19 +153,35 @@ func exportRDSSnapshotToLoc(ctx context.Context, namespace, instanceID, snapshot
 	// get the engine version
 	dbEngineVersion, err := rdsDBEngineVersion(ctx, rdsCli, tmpInstanceID)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Couldn't find DBInstance Version")
+		return nil, errkit.Wrap(err, "Couldn't find DBInstance Version")
 	}
 
 	// Extract dump from DB
-	output, err := execDumpCommand(ctx, dbEngine, BackupAction, namespace, dbEndpoint, username, password, databases, backupPrefix, backupID, profile, dbEngineVersion)
+	output, err := execDumpCommand(
+		ctx,
+		dbEngine,
+		BackupAction,
+		namespace,
+		dbEndpoint,
+		username,
+		password,
+		databases,
+		backupPrefix,
+		backupID,
+		profile,
+		dbEngineVersion,
+		postgresToolsImage,
+		annotations,
+		labels,
+	)
 	if err != nil {
-		return nil, errors.Wrap(err, "Unable to extract and push db dump to location")
+		return nil, errkit.Wrap(err, "Unable to extract and push db dump to location")
 	}
 
 	// Convert to yaml format
 	sgIDYaml, err := yaml.Marshal(sgIDs)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to create securityGroupID artifact. InstanceID=%s", tmpInstanceID)
+		return nil, errkit.Wrap(err, "Failed to create securityGroupID artifact. InstanceID=", "instanceID=", tmpInstanceID)
 	}
 
 	// Add output artifacts
@@ -149,9 +192,14 @@ func exportRDSSnapshotToLoc(ctx context.Context, namespace, instanceID, snapshot
 	return output, nil
 }
 
-func (crs *exportRDSSnapshotToLocationFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
-	var namespace, instanceID, snapshotID, username, password, backupArtifact string
+func (e *exportRDSSnapshotToLocationFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	e.progressPercent = progress.StartedPercent
+	defer func() { e.progressPercent = progress.CompletedPercent }()
+
+	var namespace, instanceID, snapshotID, username, password, dbSubnetGroup, backupArtifact, postgresToolsImage string
 	var dbEngine RDSDBEngine
+	var bpAnnotations, bpLabels map[string]string
 
 	if err := Arg(args, ExportRDSSnapshotToLocNamespaceArg, &namespace); err != nil {
 		return nil, err
@@ -174,6 +222,32 @@ func (crs *exportRDSSnapshotToLocationFunc) Exec(ctx context.Context, tp param.T
 	if err := OptArg(args, ExportRDSSnapshotToLocBackupArtPrefixArg, &backupArtifact, instanceID); err != nil {
 		return nil, err
 	}
+	if err := OptArg(args, ExportRDSSnapshotToLocDBSubnetGroupArg, &dbSubnetGroup, "default"); err != nil {
+		return nil, err
+	}
+	if err := OptArg(args, ExportRDSSnapshotToLocImageArg, &postgresToolsImage, defaultPostgresToolsImage); err != nil {
+		return nil, err
+	}
+	if err := OptArg(args, PodAnnotationsArg, &bpAnnotations, nil); err != nil {
+		return nil, err
+	}
+	if err := OptArg(args, PodLabelsArg, &bpLabels, nil); err != nil {
+		return nil, err
+	}
+
+	annotations := bpAnnotations
+	labels := bpLabels
+	if tp.PodAnnotations != nil {
+		// merge the actionset annotations with blueprint annotations
+		var actionSetAnn ActionSetAnnotations = tp.PodAnnotations
+		annotations = actionSetAnn.MergeBPAnnotations(bpAnnotations)
+	}
+
+	if tp.PodLabels != nil {
+		// merge the actionset labels with blueprint labels
+		var actionSetLabels ActionSetLabels = tp.PodLabels
+		labels = actionSetLabels.MergeBPLabels(bpLabels)
+	}
 
 	// Find databases
 	databases, err := GetYamlList(args, ExportRDSSnapshotToLocDatabasesArg)
@@ -187,7 +261,29 @@ func (crs *exportRDSSnapshotToLocationFunc) Exec(ctx context.Context, tp param.T
 		return nil, err
 	}
 
-	return exportRDSSnapshotToLoc(ctx, namespace, instanceID, snapshotID, username, password, databases, backupArtifact, dbEngine, sgIDs, tp.Profile)
+	credentialsSource, err := parseCredentialsSource(args)
+	if err != nil {
+		return nil, err
+	}
+
+	return exportRDSSnapshotToLoc(
+		ctx,
+		namespace,
+		instanceID,
+		snapshotID,
+		username,
+		password,
+		databases,
+		dbSubnetGroup,
+		backupArtifact,
+		dbEngine,
+		sgIDs,
+		*credentialsSource,
+		tp,
+		postgresToolsImage,
+		annotations,
+		labels,
+	)
 }
 
 func (*exportRDSSnapshotToLocationFunc) RequiredArgs() []string {
@@ -210,16 +306,58 @@ func (*exportRDSSnapshotToLocationFunc) Arguments() []string {
 		ExportRDSSnapshotToLocBackupArtPrefixArg,
 		ExportRDSSnapshotToLocDatabasesArg,
 		ExportRDSSnapshotToLocSecGrpIDArg,
+		ExportRDSSnapshotToLocDBSubnetGroupArg,
+		PodAnnotationsArg,
+		PodLabelsArg,
+		CredentialsSourceArg,
+		CredentialsSecretArg,
+		RegionArg,
 	}
 }
 
-func execDumpCommand(ctx context.Context, dbEngine RDSDBEngine, action RDSAction, namespace, dbEndpoint, username, password string, databases []string, backupPrefix, backupID string, profile *param.Profile, dbEngineVersion string) (map[string]interface{}, error) {
+func (e *exportRDSSnapshotToLocationFunc) Validate(args map[string]any) error {
+	if err := ValidatePodLabelsAndAnnotations(e.Name(), args); err != nil {
+		return err
+	}
+
+	if err := utils.CheckSupportedArgs(e.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(e.RequiredArgs(), args)
+}
+
+func (e *exportRDSSnapshotToLocationFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    e.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
+}
+
+func execDumpCommand(
+	ctx context.Context,
+	dbEngine RDSDBEngine,
+	action RDSAction,
+	namespace,
+	dbEndpoint,
+	username,
+	password string,
+	databases []string,
+	backupPrefix,
+	backupID string,
+	profile *param.Profile,
+	dbEngineVersion string,
+	postgresToolsImage string,
+	annotations,
+	labels map[string]string,
+) (map[string]interface{}, error) {
 	// Trim "\n" from creds
 	username = strings.TrimSpace(username)
 	password = strings.TrimSpace(password)
 
 	// Prepare and execute command with kubetask
-	command, image, err := prepareCommand(ctx, dbEngine, action, dbEndpoint, username, password, databases, backupPrefix, backupID, profile, dbEngineVersion)
+	command, err := prepareCommand(ctx, dbEngine, action, dbEndpoint, username, password, databases, backupPrefix, backupID, profile, dbEngineVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -227,14 +365,14 @@ func execDumpCommand(ctx context.Context, dbEngine RDSDBEngine, action RDSAction
 	// Create Kubernetes client
 	cli, err := kube.NewClient()
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to create Kubernetes client")
+		return nil, errkit.Wrap(err, "Failed to create Kubernetes client")
 	}
 
 	// Create cred secret
 	secretName := fmt.Sprintf("%s-%s", "postgres-secret", rand.String(10))
 	err = createPostgresSecret(cli, secretName, namespace, username, password)
 	if err != nil {
-		return nil, errors.Wrap(err, "Unable to create postgres secret")
+		return nil, errkit.Wrap(err, "Unable to create postgres secret")
 	}
 
 	defer func() {
@@ -243,56 +381,73 @@ func execDumpCommand(ctx context.Context, dbEngine RDSDBEngine, action RDSAction
 		}
 	}()
 
-	return kubeTask(ctx, cli, namespace, image, command, injectPostgresSecrets(secretName))
+	return kubeTask(ctx, cli, namespace, postgresToolsImage, command, injectPostgresSecrets(secretName), annotations, labels)
 }
 
-func prepareCommand(ctx context.Context, dbEngine RDSDBEngine, action RDSAction, dbEndpoint, username, password string, dbList []string, backupPrefix, backupID string, profile *param.Profile, dbEngineVersion string) ([]string, string, error) {
+func prepareCommand(
+	ctx context.Context,
+	dbEngine RDSDBEngine,
+	action RDSAction,
+	dbEndpoint,
+	username,
+	password string,
+	dbList []string,
+	backupPrefix,
+	backupID string,
+	profile *param.Profile,
+	dbEngineVersion string,
+) ([]string, error) {
 	// Convert profile object into json
-	profileJson, err := json.Marshal(profile)
+	profileJSON, err := json.Marshal(profile)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
-	// Find list of dbs
-	// For backup operation, if database arg is not set, we take backup of all databases
-	if dbList == nil {
-		// If no database is passed, we find list of all the existing databases
-		pg, err := postgres.NewClient(dbEndpoint, username, password, "postgres", "disable")
-		if err != nil {
-			return nil, "", errors.Wrap(err, "Error in creating postgres client")
-		}
-
-		// Test DB connection
-		if err := pg.PingDB(ctx); err != nil {
-			return nil, "", errors.Wrap(err, "Failed to ping postgres database")
-		}
-
-		dbList, err = pg.ListDatabases(ctx)
-		if err != nil {
-			return nil, "", errors.Wrap(err, "Error while listing databases")
-		}
-		dbList = filterRestrictedDB(dbList)
-	}
-
-	switch dbEngine {
-	case PostgrSQLEngine:
+	if dbEngine == PostgrSQLEngine {
 		switch action {
 		case BackupAction:
-			command, err := postgresBackupCommand(dbEndpoint, username, password, dbList, backupPrefix, backupID, profileJson)
-			return command, postgresToolsImage, err
+			// For backup operation, if database arg is not set, we take backup of all databases
+			if dbList == nil {
+				dbList, err = findDBList(ctx, dbEndpoint, username, password)
+				if err != nil {
+					return nil, err
+				}
+			}
+			command, err := postgresBackupCommand(dbEndpoint, username, password, dbList, backupPrefix, backupID, profileJSON)
+			return command, err
 		case RestoreAction:
-			command, err := postgresRestoreCommand(dbEndpoint, username, password, dbList, backupPrefix, backupID, profileJson, dbEngineVersion)
-			return command, postgresToolsImage, err
+			command, err := postgresRestoreCommand(dbEndpoint, username, password, backupPrefix, backupID, profileJSON, dbEngineVersion)
+			return command, err
 		}
 	}
-	return nil, "", errors.New("Invalid RDSDBEngine or RDSAction")
+	return nil, errkit.New("Invalid RDSDBEngine or RDSAction")
 }
 
-// nolint:unparam
+func findDBList(ctx context.Context, dbEndpoint, username, password string) ([]string, error) {
+	pg, err := postgres.NewClient(dbEndpoint, username, password, postgres.DefaultConnectDatabase, "disable")
+	if err != nil {
+		return nil, errkit.Wrap(err, "Error in creating postgres client")
+	}
+
+	// Test DB connection
+	if err := pg.PingDB(ctx); err != nil {
+		return nil, errkit.Wrap(err, "Failed to ping postgres database")
+	}
+
+	dbList, err := pg.ListDatabases(ctx)
+	if err != nil {
+		return nil, errkit.Wrap(err, "Error while listing databases")
+	}
+	return filterRestrictedDB(dbList), nil
+}
+
+//nolint:unparam
 func postgresBackupCommand(dbEndpoint, username, password string, dbList []string, backupPrefix, backupID string, profile []byte) ([]string, error) {
 	if len(dbList) == 0 {
-		return nil, errors.New("No database found to backup")
+		return nil, errkit.New("No database found to backup")
 	}
+
+	profileQuoted := strconv.Quote(string(profile))
 
 	command := []string{
 		"bash",
@@ -311,9 +466,9 @@ func postgresBackupCommand(dbEndpoint, username, password string, dbList []strin
 			for db in "${dblist[@]}";
 			  do echo "backing up $db db" && pg_dump $db -C --inserts > /backup/$db.sql;
 			done
-			tar -zc backup | kando location push --profile '%s' --path "${BACKUP_PREFIX}/${BACKUP_ID}" -
+			tar -zc backup | kando location push --profile %s --path "${BACKUP_PREFIX}/${BACKUP_ID}" -
 			kando output %s ${BACKUP_ID}`,
-			dbEndpoint, backupPrefix, backupID, strings.Join(dbList, " "), profile, ExportRDSSnapshotToLocBackupID),
+			dbEndpoint, backupPrefix, backupID, strings.Join(dbList, " "), profileQuoted, ExportRDSSnapshotToLocBackupID),
 	}
 	return command, nil
 }

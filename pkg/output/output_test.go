@@ -15,70 +15,31 @@
 package output
 
 import (
-	"bytes"
 	"testing"
 
-	. "gopkg.in/check.v1"
+	"gopkg.in/check.v1"
 )
 
 // Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) { TestingT(t) }
+func Test(t *testing.T) { check.TestingT(t) }
 
 type OutputSuite struct{}
 
-var _ = Suite(&OutputSuite{})
+var _ = check.Suite(&OutputSuite{})
 
-func (s *OutputSuite) TestValidateKey(c *C) {
+func (s *OutputSuite) TestValidateKey(c *check.C) {
 	for _, tc := range []struct {
 		key     string
-		checker Checker
+		checker check.Checker
 	}{
-		{"validKey", IsNil},
-		{"validKey2", IsNil},
-		{"valid_key", IsNil},
-		{"invalid-key", NotNil},
-		{"invalid.key", NotNil},
-		{"`invalidKey", NotNil},
+		{"validKey", check.IsNil},
+		{"validKey2", check.IsNil},
+		{"valid_key", check.IsNil},
+		{"invalid-key", check.NotNil},
+		{"invalid.key", check.NotNil},
+		{"`invalidKey", check.NotNil},
 	} {
 		err := ValidateKey(tc.key)
-		c.Check(err, tc.checker, Commentf("Key (%s) failed!", tc.key))
-	}
-}
-
-func (s *OutputSuite) TestParseValid(c *C) {
-	key, val := "foo", "bar"
-	b := bytes.NewBuffer(nil)
-	err := fPrintOutput(b, key, val)
-	c.Check(err, IsNil)
-
-	o, err := Parse(b.String())
-	c.Assert(err, IsNil)
-	c.Assert(o, NotNil)
-	c.Assert(o.Key, Equals, key)
-	c.Assert(o.Value, Equals, val)
-}
-
-func (s *OutputSuite) TestParseNoOutput(c *C) {
-	key, val := "foo", "bar"
-	b := bytes.NewBuffer(nil)
-	err := fPrintOutput(b, key, val)
-	c.Check(err, IsNil)
-	valid := b.String()
-	for _, tc := range []struct {
-		s       string
-		checker Checker
-	}{
-		{
-			s:       valid[0 : len(valid)-2],
-			checker: NotNil,
-		},
-		{
-			s:       valid[1 : len(valid)-1],
-			checker: IsNil,
-		},
-	} {
-		o, err := Parse(tc.s)
-		c.Assert(err, tc.checker)
-		c.Assert(o, IsNil)
+		c.Check(err, tc.checker, check.Commentf("Key (%s) failed!", tc.key))
 	}
 }

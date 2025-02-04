@@ -24,6 +24,16 @@ If release name contains chart name it will be used as a full name.
 {{- end -}}
 {{- end -}}
 
+{{/*Create a default repository server controller name
+*/}}
+{{- define "repository-server-controller.name" -}}
+{{- if .Values.repositoryServerController.container.name -}}
+{{- .Values.repositoryServerController.container.name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- default "repository-server-controller"}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Create chart name and version as used by the chart label.
 */}}
@@ -48,4 +58,56 @@ Create the name of the service account to use
 {{- else -}}
     {{ default "default" .Values.serviceAccount.name }}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Figure out the target port of service, this depends
+on the value of bpValidatingWebhook.enabled
+*/}}
+{{- define "kanister-operator.targetPort" -}}
+{{- if .Values.bpValidatingWebhook.enabled -}}
+    {{ 9443 }}
+{{- else -}}
+    {{ 8000 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Figure out the port of service, this depends
+on the value of bpValidatingWebhook.enabled
+*/}}
+{{- define "kanister-operator.servicePort" -}}
+{{- if .Values.bpValidatingWebhook.enabled -}}
+    {{ .Values.controller.service.port }}
+{{- else -}}
+    {{ .Values.controller.service.insecuredPort }}
+{{- end -}}
+{{- end -}}
+
+
+{{/*
+Figure out the target port of service, this depends
+on the value of validatingWebhook.repositoryserver.enabled
+*/}}
+{{- define "reposerver-controller.targetPort" -}}
+{{- if .Values.validatingWebhook.repositoryserver.enabled -}}
+    {{ 8443 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Figure out the port of service, this depends
+on the value of validatingWebhook.repositoryserver.enabled
+*/}}
+{{- define "reposerver-controller.servicePort" -}}
+{{- if .Values.validatingWebhook.repositoryserver.enabled -}}
+    {{ .Values.repositoryServerController.service.port }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Define a custom kanister-tools image
+*/}}
+{{- define "kanister-tools.image" -}}
+    {{- printf "%s:%s" (.Values.kanisterToolsImage.image) (.Values.kanisterToolsImage.tag) -}}
 {{- end -}}

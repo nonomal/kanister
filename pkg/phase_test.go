@@ -17,22 +17,32 @@ package kanister
 import (
 	"context"
 
-	. "gopkg.in/check.v1"
+	"gopkg.in/check.v1"
 
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 type PhaseSuite struct{}
 
 var (
-	_      = Suite(&PhaseSuite{})
+	_      = check.Suite(&PhaseSuite{})
 	_ Func = (*testFunc)(nil)
 )
 
 type testFunc struct {
-	output *string
-	err    error
+	output          *string
+	err             error
+	progressPercent string
+}
+
+type anotherFunc struct {
+	testFunc
+}
+
+func (a *anotherFunc) Name() string {
+	return "anotherTestFunc"
 }
 
 func (*testFunc) Name() string {
@@ -40,6 +50,9 @@ func (*testFunc) Name() string {
 }
 
 func (tf *testFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	tf.progressPercent = "0"
+	defer func() { tf.progressPercent = "100" }()
+
 	*tf.output = args["testKey"].(string)
 	return nil, tf.err
 }
@@ -52,7 +65,19 @@ func (tf *testFunc) Arguments() []string {
 	return nil
 }
 
-func (s *PhaseSuite) TestExec(c *C) {
+func (tf *testFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(tf.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(tf.RequiredArgs(), args)
+}
+
+func (tf *testFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	return crv1alpha1.PhaseProgress{ProgressPercent: tf.progressPercent}, nil
+}
+
+func (s *PhaseSuite) TestExec(c *check.C) {
 	for _, tc := range []struct {
 		artifact string
 		argument string
@@ -80,19 +105,19 @@ func (s *PhaseSuite) TestExec(c *C) {
 			"testKey": tc.argument,
 		}
 		args, err := param.RenderArgs(rawArgs, tp)
-		c.Assert(err, IsNil)
+		c.Assert(err, check.IsNil)
 		p := Phase{args: args, f: tf}
 		_, err = p.Exec(context.Background(), crv1alpha1.Blueprint{}, "", tp)
-		c.Assert(err, IsNil)
-		c.Assert(output, Equals, tc.expected)
+		c.Assert(err, check.IsNil)
+		c.Assert(output, check.Equals, tc.expected)
 	}
 }
 
-func (s *PhaseSuite) TestCheckSupportedArgs(c *C) {
+func (s *PhaseSuite) TestCheckSupportedArgs(c *check.C) {
 	for _, tc := range []struct {
 		supprtedArgs []string
 		providedArgs map[string]interface{}
-		err          Checker
+		err          check.Checker
 		expErr       string
 	}{
 		{
@@ -102,7 +127,7 @@ func (s *PhaseSuite) TestCheckSupportedArgs(c *C) {
 				"b": "val",
 				"c": "val",
 			},
-			err: IsNil,
+			err: check.IsNil,
 		},
 		{
 			supprtedArgs: []string{"a", "b", "c"},
@@ -112,19 +137,85 @@ func (s *PhaseSuite) TestCheckSupportedArgs(c *C) {
 				"c": "val",
 				"d": "val",
 			},
-			err:    NotNil,
+			err:    check.NotNil,
 			expErr: "argument d is not supported",
 		},
 		{
 			supprtedArgs: []string{"a", "b", "c"},
 			providedArgs: map[string]interface{}{},
-			err:          IsNil,
+			err:          check.IsNil,
 		},
 	} {
-		err := checkSupportedArgs(tc.supprtedArgs, tc.providedArgs)
+		err := utils.CheckSupportedArgs(tc.supprtedArgs, tc.providedArgs)
 		if err != nil {
-			c.Assert(err.Error(), Equals, tc.expErr)
+			c.Assert(err.Error(), check.Equals, tc.expErr)
 		}
 		c.Assert(err, tc.err)
+	}
+}
+
+func (s *PhaseSuite) TestRegFuncVersion(c *check.C) {
+	for _, tc := range []struct {
+		regWithVersion  string
+		expectedVersion string
+		queryVersion    string
+		f               Func
+	}{
+		{
+			f:               &testFunc{},
+			expectedVersion: "v0.0.0",
+			queryVersion:    "v0.0.0",
+		},
+		{
+			f:               &testFunc{},
+			regWithVersion:  "v0.0.1",
+			expectedVersion: "v0.0.1",
+			queryVersion:    "v0.0.1",
+		},
+		{
+			f:               &anotherFunc{},
+			expectedVersion: "v0.0.0",
+			queryVersion:    "v0.0.0",
+		},
+		{
+			f:               &anotherFunc{},
+			regWithVersion:  "v1.2.3",
+			expectedVersion: "v1.2.3",
+			queryVersion:    "v1.2.3",
+		},
+		{
+			f:               &anotherFunc{},
+			regWithVersion:  "v4.5.6",
+			expectedVersion: "v4.5.6",
+			queryVersion:    "v4.5.6",
+		},
+		{
+			f:               &anotherFunc{},
+			regWithVersion:  "v0.9.9",
+			expectedVersion: "v0.0.0",
+			// even though we are registering function version v0.9.9 we are querying the same function that is registered with version
+			// v0.0.0 that is the reason we have v0.0.0 as expectedVersion
+			queryVersion: "v0.0.0",
+		},
+		{
+			f:               &anotherFunc{},
+			regWithVersion:  "v0.1.1",
+			expectedVersion: "v0.0.0",
+			// since function anotherFunc is not registered with version v11.11.11, we will default to defaultFuncVersion (i.e., v0.0.0)
+			// that is the reason the expected version hereis v0.0.0
+			queryVersion: "v11.11.11",
+		},
+	} {
+		if tc.regWithVersion == "" {
+			err := Register(tc.f)
+			c.Assert(err, check.IsNil)
+		} else {
+			err := RegisterVersion(tc.f, tc.regWithVersion)
+			c.Assert(err, check.IsNil)
+		}
+
+		semVer, err := regFuncVersion(tc.f.Name(), tc.queryVersion)
+		c.Assert(err, check.IsNil)
+		c.Assert(semVer.Original(), check.Equals, tc.expectedVersion)
 	}
 }

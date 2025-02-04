@@ -19,8 +19,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	. "gopkg.in/check.v1"
-	v1 "k8s.io/api/core/v1"
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -28,15 +28,18 @@ import (
 
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/blockstorage"
+	"github.com/kanisterio/kanister/pkg/blockstorage/awsebs"
+	"github.com/kanisterio/kanister/pkg/blockstorage/gcepd"
+	"github.com/kanisterio/kanister/pkg/consts"
 	"github.com/kanisterio/kanister/pkg/param"
 	"github.com/kanisterio/kanister/pkg/testutil/mockblockstorage"
 )
 
 type CreateVolumeFromSnapshotTestSuite struct{}
 
-var _ = Suite(&CreateVolumeFromSnapshotTestSuite{})
+var _ = check.Suite(&CreateVolumeFromSnapshotTestSuite{})
 
-func (s *CreateVolumeFromSnapshotTestSuite) TestCreateVolumeFromSnapshot(c *C) {
+func (s *CreateVolumeFromSnapshotTestSuite) TestCreateVolumeFromSnapshot(c *check.C) {
 	ctx := context.Background()
 	ns := "ns"
 	mockGetter := mockblockstorage.NewGetter()
@@ -56,12 +59,12 @@ func (s *CreateVolumeFromSnapshotTestSuite) TestCreateVolumeFromSnapshot(c *C) {
 	cli := fake.NewSimpleClientset()
 	// fake doesn't handle generated names for PVs, so ...
 	var i int
-	pvl := &v1.PersistentVolumeList{}
+	pvl := &corev1.PersistentVolumeList{}
 	// kube.CreatePV() calls create() and list() which is to be handled for fake client
 	cli.PrependReactor("create", "persistentvolumes",
 		func(action testing.Action) (handled bool, ret runtime.Object, err error) {
 			ca := action.(testing.CreateAction)
-			pv := ca.GetObject().(*v1.PersistentVolume)
+			pv := ca.GetObject().(*corev1.PersistentVolume)
 			pvl.Items = append(pvl.Items, *pv)
 			if pv.ObjectMeta.Name == "" && pv.ObjectMeta.GenerateName != "" {
 				pv.ObjectMeta.Name = fmt.Sprintf("%s%d", pv.ObjectMeta.GenerateName, i)
@@ -83,53 +86,101 @@ func (s *CreateVolumeFromSnapshotTestSuite) TestCreateVolumeFromSnapshot(c *C) {
 	PVCData1 = append(PVCData1, volInfo1)
 	PVCData1 = append(PVCData1, volInfo2)
 	info, err := json.Marshal(PVCData1)
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 	snapinfo := string(info)
 	for _, tc := range []struct {
 		snapshotinfo string
-		check        Checker
+		check        check.Checker
 		newPVCs      []string
 	}{
 		{
 			snapshotinfo: snapinfo,
-			check:        IsNil,
+			check:        check.IsNil,
 			newPVCs:      nil,
 		},
 		{
 			snapshotinfo: snapinfo,
-			check:        IsNil,
+			check:        check.IsNil,
 			newPVCs:      []string{"newpvc-1", "newpvc-2"},
 		},
 	} {
 		providerList, err := createVolumeFromSnapshot(ctx, cli, ns, tc.snapshotinfo, tc.newPVCs, profile, mockGetter)
-		c.Assert(providerList, Not(Equals), tc.check)
+		c.Assert(providerList, check.Not(check.Equals), tc.check)
 		c.Assert(err, tc.check)
 		if err != nil {
 			continue
 		}
-		c.Assert(len(providerList) == 2, Equals, true)
+		c.Assert(len(providerList) == 2, check.Equals, true)
 		provider, ok := providerList["pvc-1"]
-		c.Assert(ok, Equals, true)
-		c.Assert(len(provider.(*mockblockstorage.Provider).SnapIDList) == 1, Equals, true)
-		c.Assert(mockblockstorage.CheckID("snap-1", provider.(*mockblockstorage.Provider).SnapIDList), Equals, true)
-		c.Assert(len(provider.(*mockblockstorage.Provider).VolIDList) == 1, Equals, true)
+		c.Assert(ok, check.Equals, true)
+		c.Assert(len(provider.(*mockblockstorage.Provider).SnapIDList) == 1, check.Equals, true)
+		c.Assert(mockblockstorage.CheckID("snap-1", provider.(*mockblockstorage.Provider).SnapIDList), check.Equals, true)
+		c.Assert(len(provider.(*mockblockstorage.Provider).VolIDList) == 1, check.Equals, true)
 
 		provider, ok = providerList["pvc-2"]
-		c.Assert(ok, Equals, true)
-		c.Assert(len(provider.(*mockblockstorage.Provider).SnapIDList) == 1, Equals, true)
-		c.Assert(mockblockstorage.CheckID("snap-2", provider.(*mockblockstorage.Provider).SnapIDList), Equals, true)
-		c.Assert(len(provider.(*mockblockstorage.Provider).VolIDList) == 1, Equals, true)
+		c.Assert(ok, check.Equals, true)
+		c.Assert(len(provider.(*mockblockstorage.Provider).SnapIDList) == 1, check.Equals, true)
+		c.Assert(mockblockstorage.CheckID("snap-2", provider.(*mockblockstorage.Provider).SnapIDList), check.Equals, true)
+		c.Assert(len(provider.(*mockblockstorage.Provider).VolIDList) == 1, check.Equals, true)
 
 		if tc.newPVCs != nil {
 			_, err = cli.CoreV1().PersistentVolumeClaims(ns).Get(ctx, "newpvc-1", metav1.GetOptions{})
-			c.Assert(err, IsNil)
+			c.Assert(err, check.IsNil)
 			_, err = cli.CoreV1().PersistentVolumeClaims(ns).Get(ctx, "newpvc-2", metav1.GetOptions{})
-			c.Assert(err, IsNil)
+			c.Assert(err, check.IsNil)
 		} else {
 			_, err = cli.CoreV1().PersistentVolumeClaims(ns).Get(ctx, "pvc-1", metav1.GetOptions{})
-			c.Assert(err, IsNil)
+			c.Assert(err, check.IsNil)
 			_, err = cli.CoreV1().PersistentVolumeClaims(ns).Get(ctx, "pvc-2", metav1.GetOptions{})
-			c.Assert(err, IsNil)
+			c.Assert(err, check.IsNil)
 		}
+	}
+}
+
+func (s *CreateVolumeFromSnapshotTestSuite) TestAddPVProvisionedByAnnotation(c *check.C) {
+	for _, tc := range []struct {
+		st                  blockstorage.Provider
+		annotations         map[string]string
+		expectedAnnotations map[string]string
+	}{
+		{
+			st:          &gcepd.GpdStorage{},
+			annotations: nil,
+			expectedAnnotations: map[string]string{
+				consts.PVProvisionedByAnnotation: consts.GCEPDProvisionerInTree,
+			},
+		},
+		{
+			st: &gcepd.GpdStorage{},
+			annotations: map[string]string{
+				"key": "value",
+			},
+			expectedAnnotations: map[string]string{
+				"key":                            "value",
+				consts.PVProvisionedByAnnotation: consts.GCEPDProvisionerInTree,
+			},
+		},
+		{
+			st:          &gcepd.GpdStorage{},
+			annotations: map[string]string{},
+			expectedAnnotations: map[string]string{
+				consts.PVProvisionedByAnnotation: consts.GCEPDProvisionerInTree,
+			},
+		},
+		{
+			st: &awsebs.EbsStorage{},
+			annotations: map[string]string{
+				"keyone": "valueone",
+				"keytwo": "valuetwo",
+			},
+			expectedAnnotations: map[string]string{
+				"keyone":                         "valueone",
+				"keytwo":                         "valuetwo",
+				consts.PVProvisionedByAnnotation: consts.AWSEBSProvisionerInTree,
+			},
+		},
+	} {
+		op := addPVProvisionedByAnnotation(tc.annotations, tc.st)
+		c.Assert(op, check.DeepEquals, tc.expectedAnnotations)
 	}
 }

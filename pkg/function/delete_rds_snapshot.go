@@ -16,16 +16,21 @@ package function
 
 import (
 	"context"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	awsrds "github.com/aws/aws-sdk-go/service/rds"
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/aws/rds"
 	"github.com/kanisterio/kanister/pkg/field"
 	"github.com/kanisterio/kanister/pkg/log"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -42,28 +47,25 @@ const (
 	DeleteRDSSnapshotSnapshotIDArg = "snapshotID"
 )
 
-type deleteRDSSnapshotFunc struct{}
+type deleteRDSSnapshotFunc struct {
+	progressPercent string
+}
 
 func (*deleteRDSSnapshotFunc) Name() string {
 	return DeleteRDSSnapshotFuncName
 }
 
-func deleteRDSSnapshot(ctx context.Context, snapshotID string, profile *param.Profile, dbEngine RDSDBEngine) (map[string]interface{}, error) {
-	// Validate profile
-	if err := ValidateProfile(profile); err != nil {
-		return nil, errors.Wrap(err, "Profile Validation failed")
-	}
-
+func deleteRDSSnapshot(ctx context.Context, snapshotID string, credentialsSource awsCredentialsSource, tp param.TemplateParams, dbEngine RDSDBEngine) error {
 	// Get aws config from profile
-	awsConfig, region, err := getAWSConfigFromProfile(ctx, profile)
+	awsConfig, region, err := getAwsConfig(ctx, credentialsSource, tp)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get AWS creds from profile")
+		return errkit.Wrap(err, "Failed to get AWS creds")
 	}
 
 	// Create rds client
 	rdsCli, err := rds.NewClient(ctx, awsConfig, region)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to create RDS client")
+		return errkit.Wrap(err, "Failed to create RDS client")
 	}
 
 	if !isAuroraCluster(string(dbEngine)) {
@@ -75,16 +77,16 @@ func deleteRDSSnapshot(ctx context.Context, snapshotID string, profile *param.Pr
 				switch err.Code() {
 				case awsrds.ErrCodeDBSnapshotNotFoundFault:
 					log.WithContext(ctx).Print("Could not find matching RDS snapshot; might have been deleted previously", field.M{"SnapshotId": snapshotID})
-					return nil, nil
+					return nil
 				default:
-					return nil, errors.Wrap(err, "Failed to delete snapshot")
+					return errkit.Wrap(err, "Failed to delete snapshot")
 				}
 			}
 		}
 		// Wait until snapshot is deleted
 		log.WithContext(ctx).Print("Waiting for RDS snapshot to be deleted", field.M{"SnapshotID": snapshotID})
 		err = rdsCli.WaitUntilDBSnapshotDeleted(ctx, snapshotID)
-		return nil, errors.Wrap(err, "Error while waiting for snapshot to be deleted")
+		return errkit.Wrap(err, "Error while waiting for snapshot to be deleted")
 	}
 
 	// delete Aurora DB cluster snapshot
@@ -95,9 +97,9 @@ func deleteRDSSnapshot(ctx context.Context, snapshotID string, profile *param.Pr
 			switch err.Code() {
 			case awsrds.ErrCodeDBClusterSnapshotNotFoundFault:
 				log.WithContext(ctx).Print("Could not find matching Aurora DB cluster snapshot; might have been deleted previously", field.M{"SnapshotId": snapshotID})
-				return nil, nil
+				return nil
 			default:
-				return nil, errors.Wrap(err, "Error deleting Aurora DB cluster snapshot")
+				return errkit.Wrap(err, "Error deleting Aurora DB cluster snapshot")
 			}
 		}
 	}
@@ -105,10 +107,14 @@ func deleteRDSSnapshot(ctx context.Context, snapshotID string, profile *param.Pr
 	log.WithContext(ctx).Print("Waiting for Aurora DB cluster snapshot to be deleted")
 	err = rdsCli.WaitUntilDBClusterDeleted(ctx, snapshotID)
 
-	return nil, errors.Wrap(err, "Error waiting for Aurora DB cluster snapshot to be deleted")
+	return errkit.Wrap(err, "Error waiting for Aurora DB cluster snapshot to be deleted")
 }
 
-func (crs *deleteRDSSnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (d *deleteRDSSnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	d.progressPercent = progress.StartedPercent
+	defer func() { d.progressPercent = progress.CompletedPercent }()
+
 	var snapshotID string
 	var dbEngine RDSDBEngine
 	if err := Arg(args, DeleteRDSSnapshotSnapshotIDArg, &snapshotID); err != nil {
@@ -119,7 +125,12 @@ func (crs *deleteRDSSnapshotFunc) Exec(ctx context.Context, tp param.TemplatePar
 		return nil, err
 	}
 
-	return deleteRDSSnapshot(ctx, snapshotID, tp.Profile, dbEngine)
+	credentialsSource, err := parseCredentialsSource(args)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, deleteRDSSnapshot(ctx, snapshotID, *credentialsSource, tp, dbEngine)
 }
 
 func (*deleteRDSSnapshotFunc) RequiredArgs() []string {
@@ -130,5 +141,24 @@ func (*deleteRDSSnapshotFunc) Arguments() []string {
 	return []string{
 		DeleteRDSSnapshotSnapshotIDArg,
 		CreateRDSSnapshotDBEngine,
+		CredentialsSourceArg,
+		CredentialsSecretArg,
+		RegionArg,
 	}
+}
+
+func (d *deleteRDSSnapshotFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(d.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(d.RequiredArgs(), args)
+}
+
+func (d *deleteRDSSnapshotFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    d.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
 }

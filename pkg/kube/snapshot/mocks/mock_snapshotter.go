@@ -6,204 +6,221 @@ package mocks
 
 import (
 	context "context"
-	gomock "github.com/golang/mock/gomock"
-	snapshot "github.com/kanisterio/kanister/pkg/kube/snapshot"
-	v1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	reflect "reflect"
+
+	gomock "github.com/golang/mock/gomock"
+	v1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
+	schema "k8s.io/apimachinery/pkg/runtime/schema"
+
+	snapshot "github.com/kanisterio/kanister/pkg/kube/snapshot"
 )
 
-// MockSnapshotter is a mock of Snapshotter interface
+// MockSnapshotter is a mock of Snapshotter interface.
 type MockSnapshotter struct {
 	ctrl     *gomock.Controller
 	recorder *MockSnapshotterMockRecorder
 }
 
-// MockSnapshotterMockRecorder is the mock recorder for MockSnapshotter
+// MockSnapshotterMockRecorder is the mock recorder for MockSnapshotter.
 type MockSnapshotterMockRecorder struct {
 	mock *MockSnapshotter
 }
 
-// NewMockSnapshotter creates a new mock instance
+// NewMockSnapshotter creates a new mock instance.
 func NewMockSnapshotter(ctrl *gomock.Controller) *MockSnapshotter {
 	mock := &MockSnapshotter{ctrl: ctrl}
 	mock.recorder = &MockSnapshotterMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockSnapshotter) EXPECT() *MockSnapshotterMockRecorder {
 	return m.recorder
 }
 
-// Clone mocks base method
-func (m *MockSnapshotter) Clone(arg0 context.Context, arg1, arg2, arg3, arg4 string, arg5 bool) error {
+// Clone mocks base method.
+func (m *MockSnapshotter) Clone(ctx context.Context, name, namespace string, waitForReady bool, snapshotMeta, snapshotContentMeta snapshot.ObjectMeta) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Clone", arg0, arg1, arg2, arg3, arg4, arg5)
+	ret := m.ctrl.Call(m, "Clone", ctx, name, namespace, waitForReady, snapshotMeta, snapshotContentMeta)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// Clone indicates an expected call of Clone
-func (mr *MockSnapshotterMockRecorder) Clone(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+// Clone indicates an expected call of Clone.
+func (mr *MockSnapshotterMockRecorder) Clone(ctx, name, namespace, waitForReady, snapshotMeta, snapshotContentMeta interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Clone", reflect.TypeOf((*MockSnapshotter)(nil).Clone), arg0, arg1, arg2, arg3, arg4, arg5)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Clone", reflect.TypeOf((*MockSnapshotter)(nil).Clone), ctx, name, namespace, waitForReady, snapshotMeta, snapshotContentMeta)
 }
 
-// CloneVolumeSnapshotClass mocks base method
-func (m *MockSnapshotter) CloneVolumeSnapshotClass(arg0, arg1, arg2 string, arg3 []string) error {
+// CloneVolumeSnapshotClass mocks base method.
+func (m *MockSnapshotter) CloneVolumeSnapshotClass(ctx context.Context, sourceClassName, targetClassName, newDeletionPolicy string, excludeAnnotations []string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CloneVolumeSnapshotClass", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "CloneVolumeSnapshotClass", ctx, sourceClassName, targetClassName, newDeletionPolicy, excludeAnnotations)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// CloneVolumeSnapshotClass indicates an expected call of CloneVolumeSnapshotClass
-func (mr *MockSnapshotterMockRecorder) CloneVolumeSnapshotClass(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+// CloneVolumeSnapshotClass indicates an expected call of CloneVolumeSnapshotClass.
+func (mr *MockSnapshotterMockRecorder) CloneVolumeSnapshotClass(ctx, sourceClassName, targetClassName, newDeletionPolicy, excludeAnnotations interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloneVolumeSnapshotClass", reflect.TypeOf((*MockSnapshotter)(nil).CloneVolumeSnapshotClass), arg0, arg1, arg2, arg3)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloneVolumeSnapshotClass", reflect.TypeOf((*MockSnapshotter)(nil).CloneVolumeSnapshotClass), ctx, sourceClassName, targetClassName, newDeletionPolicy, excludeAnnotations)
 }
 
-// Create mocks base method
-func (m *MockSnapshotter) Create(arg0 context.Context, arg1, arg2, arg3 string, arg4 *string, arg5 bool, arg6 map[string]string) error {
+// Create mocks base method.
+func (m *MockSnapshotter) Create(ctx context.Context, pvcName string, snapshotClass *string, waitForReady bool, snapshotMeta snapshot.ObjectMeta) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Create", arg0, arg1, arg2, arg3, arg4, arg5, arg6)
+	ret := m.ctrl.Call(m, "Create", ctx, pvcName, snapshotClass, waitForReady, snapshotMeta)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// Create indicates an expected call of Create
-func (mr *MockSnapshotterMockRecorder) Create(arg0, arg1, arg2, arg3, arg4, arg5, arg6 interface{}) *gomock.Call {
+// Create indicates an expected call of Create.
+func (mr *MockSnapshotterMockRecorder) Create(ctx, pvcName, snapshotClass, waitForReady, snapshotMeta interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockSnapshotter)(nil).Create), arg0, arg1, arg2, arg3, arg4, arg5, arg6)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockSnapshotter)(nil).Create), ctx, pvcName, snapshotClass, waitForReady, snapshotMeta)
 }
 
-// CreateContentFromSource mocks base method
-func (m *MockSnapshotter) CreateContentFromSource(arg0 context.Context, arg1 *snapshot.Source, arg2, arg3, arg4, arg5 string) error {
+// CreateContentFromSource mocks base method.
+func (m *MockSnapshotter) CreateContentFromSource(ctx context.Context, source *snapshot.Source, snapshotName, namespace, deletionPolicy string, snapshotContentMeta snapshot.ObjectMeta) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateContentFromSource", arg0, arg1, arg2, arg3, arg4, arg5)
+	ret := m.ctrl.Call(m, "CreateContentFromSource", ctx, source, snapshotName, namespace, deletionPolicy, snapshotContentMeta)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// CreateContentFromSource indicates an expected call of CreateContentFromSource
-func (mr *MockSnapshotterMockRecorder) CreateContentFromSource(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+// CreateContentFromSource indicates an expected call of CreateContentFromSource.
+func (mr *MockSnapshotterMockRecorder) CreateContentFromSource(ctx, source, snapshotName, namespace, deletionPolicy, snapshotContentMeta interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateContentFromSource", reflect.TypeOf((*MockSnapshotter)(nil).CreateContentFromSource), arg0, arg1, arg2, arg3, arg4, arg5)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateContentFromSource", reflect.TypeOf((*MockSnapshotter)(nil).CreateContentFromSource), ctx, source, snapshotName, namespace, deletionPolicy, snapshotContentMeta)
 }
 
-// CreateFromSource mocks base method
-func (m *MockSnapshotter) CreateFromSource(arg0 context.Context, arg1 *snapshot.Source, arg2, arg3 string, arg4 bool) error {
+// CreateFromSource mocks base method.
+func (m *MockSnapshotter) CreateFromSource(ctx context.Context, source *snapshot.Source, waitForReady bool, snapshotMeta, snapshotContentMeta snapshot.ObjectMeta) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateFromSource", arg0, arg1, arg2, arg3, arg4)
+	ret := m.ctrl.Call(m, "CreateFromSource", ctx, source, waitForReady, snapshotMeta, snapshotContentMeta)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// CreateFromSource indicates an expected call of CreateFromSource
-func (mr *MockSnapshotterMockRecorder) CreateFromSource(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+// CreateFromSource indicates an expected call of CreateFromSource.
+func (mr *MockSnapshotterMockRecorder) CreateFromSource(ctx, source, waitForReady, snapshotMeta, snapshotContentMeta interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateFromSource", reflect.TypeOf((*MockSnapshotter)(nil).CreateFromSource), arg0, arg1, arg2, arg3, arg4)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateFromSource", reflect.TypeOf((*MockSnapshotter)(nil).CreateFromSource), ctx, source, waitForReady, snapshotMeta, snapshotContentMeta)
 }
 
-// Delete mocks base method
-func (m *MockSnapshotter) Delete(arg0 context.Context, arg1, arg2 string) (*v1.VolumeSnapshot, error) {
+// Delete mocks base method.
+func (m *MockSnapshotter) Delete(ctx context.Context, name, namespace string) (*v1.VolumeSnapshot, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Delete", ctx, name, namespace)
 	ret0, _ := ret[0].(*v1.VolumeSnapshot)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Delete indicates an expected call of Delete
-func (mr *MockSnapshotterMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
+// Delete indicates an expected call of Delete.
+func (mr *MockSnapshotterMockRecorder) Delete(ctx, name, namespace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSnapshotter)(nil).Delete), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSnapshotter)(nil).Delete), ctx, name, namespace)
 }
 
-// DeleteContent mocks base method
-func (m *MockSnapshotter) DeleteContent(arg0 context.Context, arg1 string) error {
+// DeleteContent mocks base method.
+func (m *MockSnapshotter) DeleteContent(ctx context.Context, name string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteContent", arg0, arg1)
+	ret := m.ctrl.Call(m, "DeleteContent", ctx, name)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// DeleteContent indicates an expected call of DeleteContent
-func (mr *MockSnapshotterMockRecorder) DeleteContent(arg0, arg1 interface{}) *gomock.Call {
+// DeleteContent indicates an expected call of DeleteContent.
+func (mr *MockSnapshotterMockRecorder) DeleteContent(ctx, name interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteContent", reflect.TypeOf((*MockSnapshotter)(nil).DeleteContent), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteContent", reflect.TypeOf((*MockSnapshotter)(nil).DeleteContent), ctx, name)
 }
 
-// Get mocks base method
-func (m *MockSnapshotter) Get(arg0 context.Context, arg1, arg2 string) (*v1.VolumeSnapshot, error) {
+// Get mocks base method.
+func (m *MockSnapshotter) Get(ctx context.Context, name, namespace string) (*v1.VolumeSnapshot, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Get", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Get", ctx, name, namespace)
 	ret0, _ := ret[0].(*v1.VolumeSnapshot)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Get indicates an expected call of Get
-func (mr *MockSnapshotterMockRecorder) Get(arg0, arg1, arg2 interface{}) *gomock.Call {
+// Get indicates an expected call of Get.
+func (mr *MockSnapshotterMockRecorder) Get(ctx, name, namespace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockSnapshotter)(nil).Get), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockSnapshotter)(nil).Get), ctx, name, namespace)
 }
 
-// GetSource mocks base method
-func (m *MockSnapshotter) GetSource(arg0 context.Context, arg1, arg2 string) (*snapshot.Source, error) {
+// GetSource mocks base method.
+func (m *MockSnapshotter) GetSource(ctx context.Context, snapshotName, namespace string) (*snapshot.Source, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSource", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "GetSource", ctx, snapshotName, namespace)
 	ret0, _ := ret[0].(*snapshot.Source)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetSource indicates an expected call of GetSource
-func (mr *MockSnapshotterMockRecorder) GetSource(arg0, arg1, arg2 interface{}) *gomock.Call {
+// GetSource indicates an expected call of GetSource.
+func (mr *MockSnapshotterMockRecorder) GetSource(ctx, snapshotName, namespace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSource", reflect.TypeOf((*MockSnapshotter)(nil).GetSource), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSource", reflect.TypeOf((*MockSnapshotter)(nil).GetSource), ctx, snapshotName, namespace)
 }
 
-// GetVolumeSnapshotClass mocks base method
-func (m *MockSnapshotter) GetVolumeSnapshotClass(arg0, arg1, arg2 string) (string, error) {
+// GetVolumeSnapshotClass mocks base method.
+func (m *MockSnapshotter) GetVolumeSnapshotClass(ctx context.Context, annotationKey, annotationValue, storageClassName string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetVolumeSnapshotClass", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "GetVolumeSnapshotClass", ctx, annotationKey, annotationValue, storageClassName)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetVolumeSnapshotClass indicates an expected call of GetVolumeSnapshotClass
-func (mr *MockSnapshotterMockRecorder) GetVolumeSnapshotClass(arg0, arg1, arg2 interface{}) *gomock.Call {
+// GetVolumeSnapshotClass indicates an expected call of GetVolumeSnapshotClass.
+func (mr *MockSnapshotterMockRecorder) GetVolumeSnapshotClass(ctx, annotationKey, annotationValue, storageClassName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVolumeSnapshotClass", reflect.TypeOf((*MockSnapshotter)(nil).GetVolumeSnapshotClass), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVolumeSnapshotClass", reflect.TypeOf((*MockSnapshotter)(nil).GetVolumeSnapshotClass), ctx, annotationKey, annotationValue, storageClassName)
 }
 
-// List mocks base method
-func (m *MockSnapshotter) List(arg0 context.Context, arg1 string, arg2 map[string]string) (*v1.VolumeSnapshotList, error) {
+// GroupVersion mocks base method.
+func (m *MockSnapshotter) GroupVersion(ctx context.Context) schema.GroupVersion {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "List", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "GroupVersion", ctx)
+	ret0, _ := ret[0].(schema.GroupVersion)
+	return ret0
+}
+
+// GroupVersion indicates an expected call of GroupVersion.
+func (mr *MockSnapshotterMockRecorder) GroupVersion(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GroupVersion", reflect.TypeOf((*MockSnapshotter)(nil).GroupVersion), ctx)
+}
+
+// List mocks base method.
+func (m *MockSnapshotter) List(ctx context.Context, namespace string, labels map[string]string) (*v1.VolumeSnapshotList, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "List", ctx, namespace, labels)
 	ret0, _ := ret[0].(*v1.VolumeSnapshotList)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// List indicates an expected call of List
-func (mr *MockSnapshotterMockRecorder) List(arg0, arg1, arg2 interface{}) *gomock.Call {
+// List indicates an expected call of List.
+func (mr *MockSnapshotterMockRecorder) List(ctx, namespace, labels interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockSnapshotter)(nil).List), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockSnapshotter)(nil).List), ctx, namespace, labels)
 }
 
-// WaitOnReadyToUse mocks base method
-func (m *MockSnapshotter) WaitOnReadyToUse(arg0 context.Context, arg1, arg2 string) error {
+// WaitOnReadyToUse mocks base method.
+func (m *MockSnapshotter) WaitOnReadyToUse(ctx context.Context, snapshotName, namespace string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WaitOnReadyToUse", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "WaitOnReadyToUse", ctx, snapshotName, namespace)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// WaitOnReadyToUse indicates an expected call of WaitOnReadyToUse
-func (mr *MockSnapshotterMockRecorder) WaitOnReadyToUse(arg0, arg1, arg2 interface{}) *gomock.Call {
+// WaitOnReadyToUse indicates an expected call of WaitOnReadyToUse.
+func (mr *MockSnapshotterMockRecorder) WaitOnReadyToUse(ctx, snapshotName, namespace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitOnReadyToUse", reflect.TypeOf((*MockSnapshotter)(nil).WaitOnReadyToUse), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitOnReadyToUse", reflect.TypeOf((*MockSnapshotter)(nil).WaitOnReadyToUse), ctx, snapshotName, namespace)
 }

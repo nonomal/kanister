@@ -15,16 +15,22 @@
 package function
 
 import (
+	"bytes"
 	"context"
-	"regexp"
+	"io"
+	"os"
+	"strings"
+	"time"
 
-	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kanister "github.com/kanisterio/kanister/pkg"
-	"github.com/kanisterio/kanister/pkg/format"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/output"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -44,7 +50,9 @@ const (
 	KubeExecCommandArg       = "command"
 )
 
-type kubeExecFunc struct{}
+type kubeExecFunc struct {
+	progressPercent string
+}
 
 func (*kubeExecFunc) Name() string {
 	return KubeExecFuncName
@@ -54,25 +62,22 @@ func parseLogAndCreateOutput(out string) (map[string]interface{}, error) {
 	if out == "" {
 		return nil, nil
 	}
-	var op map[string]interface{}
-	logs := regexp.MustCompile("[\n]").Split(out, -1)
-	for _, l := range logs {
-		opObj, err := output.Parse(l)
-		if err != nil {
-			return nil, err
-		}
-		if opObj == nil {
-			continue
-		}
-		if op == nil {
-			op = make(map[string]interface{})
-		}
-		op[opObj.Key] = opObj.Value
+
+	reader := io.NopCloser(strings.NewReader(out))
+	output, err := output.LogAndParse(context.Background(), reader)
+
+	// For some reason we expect empty output to be returned as nil here
+	if len(output) == 0 {
+		return nil, err
 	}
-	return op, nil
+	return output, err
 }
 
 func (kef *kubeExecFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	kef.progressPercent = progress.StartedPercent
+	defer func() { kef.progressPercent = progress.CompletedPercent }()
+
 	cli, err := kube.NewClient()
 	if err != nil {
 		return nil, err
@@ -91,15 +96,16 @@ func (kef *kubeExecFunc) Exec(ctx context.Context, tp param.TemplateParams, args
 	if err = Arg(args, KubeExecCommandArg, &cmd); err != nil {
 		return nil, err
 	}
-	stdout, stderr, err := kube.Exec(cli, namespace, pod, container, cmd, nil)
-	format.LogWithCtx(ctx, pod, container, stdout)
-	format.LogWithCtx(ctx, pod, container, stderr)
-	if err != nil {
+
+	var (
+		bufStdout  = &bytes.Buffer{}
+		outWriters = io.MultiWriter(os.Stdout, bufStdout)
+	)
+	if err := kube.ExecOutput(ctx, cli, namespace, pod, container, cmd, nil, outWriters, os.Stderr); err != nil {
 		return nil, err
 	}
 
-	out, err := parseLogAndCreateOutput(stdout)
-	return out, errors.Wrap(err, "Failed to generate output")
+	return parseLogAndCreateOutput(bufStdout.String())
 }
 
 func (*kubeExecFunc) RequiredArgs() []string {
@@ -117,4 +123,20 @@ func (*kubeExecFunc) Arguments() []string {
 		KubeExecCommandArg,
 		KubeExecContainerNameArg,
 	}
+}
+
+func (kef *kubeExecFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(kef.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(kef.RequiredArgs(), args)
+}
+
+func (kef *kubeExecFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    kef.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
 }

@@ -15,9 +15,11 @@
 package function
 
 import (
-	"github.com/ghodss/yaml"
+	"fmt"
+
+	"github.com/kanisterio/errkit"
 	"github.com/mitchellh/mapstructure"
-	"github.com/pkg/errors"
+	"sigs.k8s.io/yaml"
 
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/kube"
@@ -29,11 +31,11 @@ import (
 func Arg(args map[string]interface{}, argName string, result interface{}) error {
 	if val, ok := args[argName]; ok {
 		if err := mapstructure.WeakDecode(val, result); err != nil {
-			return errors.Wrapf(err, "Failed to decode arg `%s`", argName)
+			return errkit.Wrap(err, fmt.Sprintf("Failed to decode arg `%s`", argName))
 		}
 		return nil
 	}
-	return errors.New("Argument missing " + argName)
+	return errkit.New("Argument missing " + argName)
 }
 
 // OptArg returns the value of the specified argument if it exists
@@ -62,7 +64,7 @@ func GetPodSpecOverride(tp param.TemplateParams, args map[string]interface{}, ar
 	// Check if PodOverride specs are passed through actionset
 	// If yes, override podOverride specs
 	if tp.PodOverride != nil {
-		podOverride, err = kube.CreateAndMergeJsonPatch(podOverride, tp.PodOverride)
+		podOverride, err = kube.CreateAndMergeJSONPatch(podOverride, tp.PodOverride)
 		if err != nil {
 			return nil, err
 		}
@@ -73,12 +75,11 @@ func GetPodSpecOverride(tp param.TemplateParams, args map[string]interface{}, ar
 // GetYamlList parses yaml formatted list arg and converts it into slice of string.
 // Returns nil error, if arg is not present.
 // The value can be in either of two formats:
-// key: "- val1\n- val2\n- val3"	(string) if you are referencing from configmap or
-// 					from a inputArtifacts
+// key: "- val1\n- val2\n- val3"	(string) if you are referencing from configmap or from a inputArtifacts
 // OR
 // key:
-//    - "val1"
-//    - "val2"		(list of string) Allows users to pass list in blueprint
+//   - "val1"
+//   - "val2"		(list of string) Allows users to pass list in blueprint
 func GetYamlList(args map[string]interface{}, argName string) ([]string, error) {
 	if !ArgExists(args, argName) {
 		return nil, nil
@@ -106,5 +107,5 @@ func GetYamlList(args map[string]interface{}, argName string) ([]string, error) 
 		err := yaml.Unmarshal(valListBytes, &valList)
 		return valList, err
 	}
-	return nil, errors.Errorf("Invalid %s arg format", argName)
+	return nil, errkit.New(fmt.Sprintf("Invalid %s arg format", argName))
 }

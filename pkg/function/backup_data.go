@@ -16,19 +16,25 @@ package function
 
 import (
 	"context"
+	"fmt"
+	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/kubernetes"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/consts"
 	"github.com/kanisterio/kanister/pkg/field"
 	"github.com/kanisterio/kanister/pkg/format"
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/log"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
 	"github.com/kanisterio/kanister/pkg/restic"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 const (
@@ -56,6 +62,8 @@ const (
 	BackupDataOutputBackupSize = "size"
 	// BackupDataOutputBackupPhysicalSize is the key used for returning physical size taken by the snapshot
 	BackupDataOutputBackupPhysicalSize = "phySize"
+	// InsecureTLS is the key name which provides an option to a user to disable tls
+	InsecureTLS = "insecureTLS"
 )
 
 func init() {
@@ -64,15 +72,22 @@ func init() {
 
 var _ kanister.Func = (*backupDataFunc)(nil)
 
-type backupDataFunc struct{}
+type backupDataFunc struct {
+	progressPercent string
+}
 
 func (*backupDataFunc) Name() string {
 	return BackupDataFuncName
 }
 
-func (*backupDataFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (b *backupDataFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	b.progressPercent = progress.StartedPercent
+	defer func() { b.progressPercent = progress.CompletedPercent }()
+
 	var namespace, pod, container, includePath, backupArtifactPrefix, encryptionKey string
 	var err error
+	var insecureTLS bool
 	if err = Arg(args, BackupDataNamespaceArg, &namespace); err != nil {
 		return nil, err
 	}
@@ -91,22 +106,25 @@ func (*backupDataFunc) Exec(ctx context.Context, tp param.TemplateParams, args m
 	if err = OptArg(args, BackupDataEncryptionKeyArg, &encryptionKey, restic.GeneratePassword()); err != nil {
 		return nil, err
 	}
+	if err = OptArg(args, InsecureTLS, &insecureTLS, false); err != nil {
+		return nil, err
+	}
 
 	if err = ValidateProfile(tp.Profile); err != nil {
-		return nil, errors.Wrapf(err, "Failed to validate Profile")
+		return nil, errkit.Wrap(err, "Failed to validate Profile")
 	}
 
 	backupArtifactPrefix = ResolveArtifactPrefix(backupArtifactPrefix, tp.Profile)
 
 	cli, err := kube.NewClient()
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to create Kubernetes client")
+		return nil, errkit.Wrap(err, "Failed to create Kubernetes client")
 	}
 	ctx = field.Context(ctx, consts.PodNameKey, pod)
 	ctx = field.Context(ctx, consts.ContainerNameKey, container)
-	backupOutputs, err := backupData(ctx, cli, namespace, pod, container, backupArtifactPrefix, includePath, encryptionKey, tp)
+	backupOutputs, err := backupData(ctx, cli, namespace, pod, container, backupArtifactPrefix, includePath, encryptionKey, insecureTLS, tp)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to backup data")
+		return nil, errkit.Wrap(err, "Failed to backup data")
 	}
 	output := map[string]interface{}{
 		BackupDataOutputBackupID:           backupOutputs.backupID,
@@ -137,7 +155,16 @@ func (*backupDataFunc) Arguments() []string {
 		BackupDataIncludePathArg,
 		BackupDataBackupArtifactPrefixArg,
 		BackupDataEncryptionKeyArg,
+		InsecureTLS,
 	}
+}
+
+func (b *backupDataFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(b.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(b.RequiredArgs(), args)
 }
 
 type backupDataParsedOutput struct {
@@ -148,32 +175,32 @@ type backupDataParsedOutput struct {
 	phySize    string
 }
 
-func backupData(ctx context.Context, cli kubernetes.Interface, namespace, pod, container, backupArtifactPrefix, includePath, encryptionKey string, tp param.TemplateParams) (backupDataParsedOutput, error) {
+func backupData(ctx context.Context, cli kubernetes.Interface, namespace, pod, container, backupArtifactPrefix, includePath, encryptionKey string, insecureTLS bool, tp param.TemplateParams) (backupDataParsedOutput, error) {
 	pw, err := GetPodWriter(cli, ctx, namespace, pod, container, tp.Profile)
 	if err != nil {
 		return backupDataParsedOutput{}, err
 	}
 	defer CleanUpCredsFile(ctx, pw, namespace, pod, container)
-	if err = restic.GetOrCreateRepository(cli, namespace, pod, container, backupArtifactPrefix, encryptionKey, tp.Profile); err != nil {
+	if err = restic.GetOrCreateRepository(ctx, cli, namespace, pod, container, backupArtifactPrefix, encryptionKey, insecureTLS, tp.Profile); err != nil {
 		return backupDataParsedOutput{}, err
 	}
 
 	// Create backup and dump it on the object store
 	backupTag := rand.String(10)
-	cmd, err := restic.BackupCommandByTag(tp.Profile, backupArtifactPrefix, backupTag, includePath, encryptionKey)
+	cmd, err := restic.BackupCommandByTag(tp.Profile, backupArtifactPrefix, backupTag, includePath, encryptionKey, insecureTLS)
 	if err != nil {
 		return backupDataParsedOutput{}, err
 	}
-	stdout, stderr, err := kube.Exec(cli, namespace, pod, container, cmd, nil)
+	stdout, stderr, err := kube.Exec(ctx, cli, namespace, pod, container, cmd, nil)
 	format.LogWithCtx(ctx, pod, container, stdout)
 	format.LogWithCtx(ctx, pod, container, stderr)
 	if err != nil {
-		return backupDataParsedOutput{}, errors.Wrapf(err, "Failed to create and upload backup")
+		return backupDataParsedOutput{}, errkit.Wrap(err, "Failed to create and upload backup")
 	}
 	// Get the snapshot ID from log
 	backupID := restic.SnapshotIDFromBackupLog(stdout)
 	if backupID == "" {
-		return backupDataParsedOutput{}, errors.Errorf("Failed to parse the backup ID from logs, backup logs %s", stdout)
+		return backupDataParsedOutput{}, errkit.New(fmt.Sprintf("Failed to parse the backup ID from logs, backup logs %s", stdout))
 	}
 	// Get the file count and size of the backup from log
 	fileCount, backupSize, phySize := restic.SnapshotStatsFromBackupLog(stdout)
@@ -186,5 +213,13 @@ func backupData(ctx context.Context, cli kubernetes.Interface, namespace, pod, c
 		fileCount:  fileCount,
 		backupSize: backupSize,
 		phySize:    phySize,
+	}, nil
+}
+
+func (b *backupDataFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    b.progressPercent,
+		LastTransitionTime: &metav1Time,
 	}, nil
 }

@@ -4,19 +4,21 @@ import (
 	"context"
 	"time"
 
-	. "gopkg.in/check.v1"
+	"gopkg.in/check.v1"
 	appsv1 "k8s.io/api/apps/v1"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/kanisterio/kanister/pkg/errorchecker"
 )
 
 type WorkloadReadySuite struct{}
 
-var _ = Suite(&WorkloadReadySuite{})
+var _ = check.Suite(&WorkloadReadySuite{})
 
 type cliParams struct {
 	name                    string
@@ -28,11 +30,11 @@ type cliParams struct {
 	statusAvailableReplicas int32
 	generation              int64
 	observedGeneration      int64
-	podStatus               v1.PodPhase
+	podStatus               corev1.PodPhase
 }
 
 // These tests can be used to force the various error states
-func (s *WorkloadReadySuite) TestWaitOnStatefulSetReady(c *C) {
+func (s *WorkloadReadySuite) TestWaitOnStatefulSetReady(c *check.C) {
 	testCases := []struct {
 		input cliParams
 		want  string
@@ -53,23 +55,23 @@ func (s *WorkloadReadySuite) TestWaitOnStatefulSetReady(c *C) {
 		defer cancel()
 		err := WaitOnStatefulSetReady(ctx, getCli(tc.input), tc.input.namespace, tc.input.name)
 		if tc.want != "" {
-			c.Assert(err, ErrorMatches, tc.want)
+			errorchecker.AssertErrorMessage(c, err, tc.want)
 		} else {
-			c.Assert(err, IsNil)
+			c.Assert(err, check.IsNil)
 		}
 	}
 }
 
-func (s *WorkloadReadySuite) TestStatefulSetReady(c *C) {
+func (s *WorkloadReadySuite) TestStatefulSetReady(c *check.C) {
 	cp := cliParams{"ss", "default", true, 1, 1, 1, 1, 1, 1, "Running"}
 	ctx := context.Background()
 	ready, status, err := StatefulSetReady(ctx, getCli(cp), cp.namespace, cp.name)
-	c.Assert(status, DeepEquals, "")
-	c.Assert(ready, DeepEquals, true)
-	c.Assert(err, IsNil)
+	c.Assert(status, check.DeepEquals, "")
+	c.Assert(ready, check.DeepEquals, true)
+	c.Assert(err, check.IsNil)
 }
 
-func (s *WorkloadReadySuite) TestWaitOnDeploymentReady(c *C) {
+func (s *WorkloadReadySuite) TestWaitOnDeploymentReady(c *check.C) {
 	testCases := []struct {
 		input cliParams
 		want  string
@@ -99,20 +101,20 @@ func (s *WorkloadReadySuite) TestWaitOnDeploymentReady(c *C) {
 		defer cancel()
 		err := WaitOnDeploymentReady(ctx, getCli(tc.input), tc.input.namespace, tc.input.name)
 		if tc.want != "" {
-			c.Assert(err, ErrorMatches, tc.want)
+			errorchecker.AssertErrorMessage(c, err, tc.want)
 		} else {
-			c.Assert(err, IsNil)
+			c.Assert(err, check.IsNil)
 		}
 	}
 }
 
-func (s *WorkloadReadySuite) TestDeploymentReady(c *C) {
+func (s *WorkloadReadySuite) TestDeploymentReady(c *check.C) {
 	cp := cliParams{"dep", "default", false, 1, 1, 1, 1, 1, 1, "Running"}
 	ctx := context.Background()
 	ready, status, err := DeploymentReady(ctx, getCli(cp), cp.namespace, cp.name)
-	c.Assert(ready, DeepEquals, true)
-	c.Assert(status, DeepEquals, "")
-	c.Assert(err, IsNil)
+	c.Assert(ready, check.DeepEquals, true)
+	c.Assert(status, check.DeepEquals, "")
+	c.Assert(err, check.IsNil)
 }
 
 // Returns a fake k8s cli that contains a Deployment, ReplicaSet or StatefulSet, and Pod
@@ -138,13 +140,13 @@ func getCli(cp cliParams) kubernetes.Interface {
 				ObservedGeneration: cp.observedGeneration,
 			},
 		},
-		&v1.Pod{
+		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            "pod",
 				Namespace:       cp.namespace,
 				OwnerReferences: []metav1.OwnerReference{{UID: pUID}},
 			},
-			Status: v1.PodStatus{
+			Status: corev1.PodStatus{
 				Phase: cp.podStatus,
 			},
 		},

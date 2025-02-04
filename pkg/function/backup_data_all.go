@@ -19,16 +19,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/consts"
 	"github.com/kanisterio/kanister/pkg/field"
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
 	"github.com/kanisterio/kanister/pkg/restic"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 const (
@@ -62,15 +67,22 @@ func init() {
 
 var _ kanister.Func = (*backupDataAllFunc)(nil)
 
-type backupDataAllFunc struct{}
+type backupDataAllFunc struct {
+	progressPercent string
+}
 
 func (*backupDataAllFunc) Name() string {
 	return BackupDataAllFuncName
 }
 
-func (*backupDataAllFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (b *backupDataAllFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	b.progressPercent = progress.StartedPercent
+	defer func() { b.progressPercent = progress.CompletedPercent }()
+
 	var namespace, pods, container, includePath, backupArtifactPrefix, encryptionKey string
 	var err error
+	var insecureTLS bool
 	if err = Arg(args, BackupDataAllNamespaceArg, &namespace); err != nil {
 		return nil, err
 	}
@@ -89,16 +101,19 @@ func (*backupDataAllFunc) Exec(ctx context.Context, tp param.TemplateParams, arg
 	if err = OptArg(args, BackupDataAllEncryptionKeyArg, &encryptionKey, restic.GeneratePassword()); err != nil {
 		return nil, err
 	}
+	if err = OptArg(args, InsecureTLS, &insecureTLS, false); err != nil {
+		return nil, err
+	}
 
 	if err = ValidateProfile(tp.Profile); err != nil {
-		return nil, errors.Wrapf(err, "Failed to validate Profile")
+		return nil, errkit.Wrap(err, "Failed to validate Profile")
 	}
 
 	backupArtifactPrefix = ResolveArtifactPrefix(backupArtifactPrefix, tp.Profile)
 
 	cli, err := kube.NewClient()
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to create Kubernetes client")
+		return nil, errkit.Wrap(err, "Failed to create Kubernetes client")
 	}
 	var ps []string
 	if pods == "" {
@@ -108,13 +123,13 @@ func (*backupDataAllFunc) Exec(ctx context.Context, tp param.TemplateParams, arg
 		case tp.StatefulSet != nil:
 			ps = tp.StatefulSet.Pods
 		default:
-			return nil, errors.New("Failed to get pods")
+			return nil, errkit.New("Failed to get pods")
 		}
 	} else {
 		ps = strings.Fields(pods)
 	}
 	ctx = field.Context(ctx, consts.ContainerNameKey, container)
-	return backupDataAll(ctx, cli, namespace, ps, container, backupArtifactPrefix, includePath, encryptionKey, tp)
+	return backupDataAll(ctx, cli, namespace, ps, container, backupArtifactPrefix, includePath, encryptionKey, insecureTLS, tp)
 }
 
 func (*backupDataAllFunc) RequiredArgs() []string {
@@ -134,10 +149,20 @@ func (*backupDataAllFunc) Arguments() []string {
 		BackupDataAllBackupArtifactPrefixArg,
 		BackupDataAllPodsArg,
 		BackupDataAllEncryptionKeyArg,
+		InsecureTLS,
 	}
 }
 
-func backupDataAll(ctx context.Context, cli kubernetes.Interface, namespace string, ps []string, container string, backupArtifactPrefix, includePath, encryptionKey string, tp param.TemplateParams) (map[string]interface{}, error) {
+func (b *backupDataAllFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(b.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(b.RequiredArgs(), args)
+}
+
+func backupDataAll(ctx context.Context, cli kubernetes.Interface, namespace string, ps []string, container string, backupArtifactPrefix, includePath, encryptionKey string,
+	insecureTLS bool, tp param.TemplateParams) (map[string]interface{}, error) {
 	errChan := make(chan error, len(ps))
 	outChan := make(chan BackupInfo, len(ps))
 	Output := make(map[string]BackupInfo)
@@ -145,8 +170,8 @@ func backupDataAll(ctx context.Context, cli kubernetes.Interface, namespace stri
 	for _, pod := range ps {
 		go func(pod string, container string) {
 			ctx = field.Context(ctx, consts.PodNameKey, pod)
-			backupOutputs, err := backupData(ctx, cli, namespace, pod, container, fmt.Sprintf("%s/%s", backupArtifactPrefix, pod), includePath, encryptionKey, tp)
-			errChan <- errors.Wrapf(err, "Failed to backup data for pod %s", pod)
+			backupOutputs, err := backupData(ctx, cli, namespace, pod, container, fmt.Sprintf("%s/%s", backupArtifactPrefix, pod), includePath, encryptionKey, insecureTLS, tp)
+			errChan <- errkit.Wrap(err, "Failed to backup data for pod", "pod", pod)
 			outChan <- BackupInfo{PodName: pod, BackupID: backupOutputs.backupID, BackupTag: backupOutputs.backupTag}
 		}(pod, container)
 	}
@@ -161,14 +186,22 @@ func backupDataAll(ctx context.Context, cli kubernetes.Interface, namespace stri
 		}
 	}
 	if len(errs) != 0 {
-		return nil, errors.New(strings.Join(errs, "\n"))
+		return nil, errkit.New(strings.Join(errs, "\n"))
 	}
 	manifestData, err := json.Marshal(Output)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to encode JSON data")
+		return nil, errkit.Wrap(err, "Failed to encode JSON data")
 	}
 	return map[string]interface{}{
 		BackupDataAllOutput:   string(manifestData),
 		FunctionOutputVersion: kanister.DefaultVersion,
+	}, nil
+}
+
+func (b *backupDataAllFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    b.progressPercent,
+		LastTransitionTime: &metav1Time,
 	}, nil
 }

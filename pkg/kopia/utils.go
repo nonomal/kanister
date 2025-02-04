@@ -23,24 +23,21 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"path/filepath"
+	"strings"
 
+	"github.com/kanisterio/errkit"
 	"github.com/kopia/kopia/repo"
 	"github.com/kopia/kopia/repo/manifest"
 	"github.com/kopia/kopia/repo/object"
 	"github.com/kopia/kopia/snapshot"
 	"github.com/kopia/kopia/snapshot/snapshotfs"
-	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	kopiacmd "github.com/kanisterio/kanister/pkg/kopia/command"
 )
 
 const (
-	// defaultConfigFilePath is the file which contains kopia repo config
-	defaultConfigFilePath = "/tmp/kopia-repository.config"
-
-	// defaultCacheDirectory is the directory where kopia content cache is created
-	defaultCacheDirectory = "/tmp/kopia-cache"
-
 	// defaultDataStoreGeneralContentCacheSizeMB is the default content cache size for general command workloads
 	defaultDataStoreGeneralContentCacheSizeMB = 0
 
@@ -58,33 +55,37 @@ const (
 	// use when describing repo
 	ObjectStorePathOption = "objectStorePath"
 
-	// Kopia profile option keys
 	// DataStoreGeneralContentCacheSizeMBKey is the key to pass content cache size for general command workloads
 	DataStoreGeneralContentCacheSizeMBKey = "dataStoreGeneralContentCacheSize"
 	// DataStoreGeneralMetadataCacheSizeMBKey is the key to pass metadata cache size for general command workloads
 	DataStoreGeneralMetadataCacheSizeMBKey = "dataStoreGeneralMetadataCacheSize"
+	// ServerUsernameFormat is used to construct server username for Kopia Repository Server Status Command
+	ServerUsernameFormat = "%s@%s"
+	// KanisterAdminUsername is the username for the user with Admin privileges
+	KanisterAdminUsername = "kanister-admin"
+	defaultServerHostname = "data-mover-server-pod"
 )
 
 // ExtractFingerprintFromCertSecret extracts the fingerprint from the given certificate secret
 func ExtractFingerprintFromCertSecret(ctx context.Context, cli kubernetes.Interface, secretName, secretNamespace string) (string, error) {
 	secret, err := cli.CoreV1().Secrets(secretNamespace).Get(ctx, secretName, metav1.GetOptions{})
 	if err != nil {
-		return "", errors.Wrapf(err, "Failed to get Certificate Secret. Secret: %s", secretName)
+		return "", errkit.Wrap(err, "Failed to get Certificate Secret.", "secretName", secretName)
 	}
 
 	certBytes, err := json.Marshal(secret.Data[TLSCertificateKey])
 	if err != nil {
-		return "", errors.Wrap(err, "Failed to marshal Certificate Secret Data")
+		return "", errkit.Wrap(err, "Failed to marshal Certificate Secret Data")
 	}
 
 	var certString string
 	if err := json.Unmarshal([]byte(certBytes), &certString); err != nil {
-		return "", errors.Wrap(err, "Failed to unmarshal Certificate Secret Data")
+		return "", errkit.Wrap(err, "Failed to unmarshal Certificate Secret Data")
 	}
 
 	decodedCertData, err := base64.StdEncoding.DecodeString(certString)
 	if err != nil {
-		return "", errors.Wrap(err, "Failed to decode Certificate Secret Data")
+		return "", errkit.Wrap(err, "Failed to decode Certificate Secret Data")
 	}
 
 	return extractFingerprintFromSliceOfBytes(decodedCertData)
@@ -95,12 +96,12 @@ func ExtractFingerprintFromCertSecret(ctx context.Context, cli kubernetes.Interf
 func extractFingerprintFromSliceOfBytes(pemData []byte) (string, error) {
 	block, rest := pem.Decode([]byte(pemData))
 	if block == nil || len(rest) > 0 {
-		return "", errors.New("Failed to PEM Decode Kopia API Server Certificate Secret Data")
+		return "", errkit.New("Failed to PEM Decode Kopia API Server Certificate Secret Data")
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return "", errors.Wrap(err, "Failed to parse X509 Kopia API Server Certificate Secret Data")
+		return "", errkit.Wrap(err, "Failed to parse X509 Kopia API Server Certificate Secret Data")
 	}
 
 	fingerprint := sha256.Sum256(cert.Raw)
@@ -113,17 +114,17 @@ func ExtractFingerprintFromCertificateJSON(cert string) (string, error) {
 	var certMap map[string]string
 
 	if err := json.Unmarshal([]byte(cert), &certMap); err != nil {
-		return "", errors.Wrap(err, "Failed to unmarshal Kopia API Server Certificate Secret Data")
+		return "", errkit.Wrap(err, "Failed to unmarshal Kopia API Server Certificate Secret Data")
 	}
 
 	decodedCertData, err := base64.StdEncoding.DecodeString(certMap[TLSCertificateKey])
 	if err != nil {
-		return "", errors.Wrap(err, "Failed to base64 decode Kopia API Server Certificate Secret Data")
+		return "", errkit.Wrap(err, "Failed to base64 decode Kopia API Server Certificate Secret Data")
 	}
 
 	fingerprint, err := extractFingerprintFromSliceOfBytes(decodedCertData)
 	if err != nil {
-		return "", errors.Wrap(err, "Failed to extract fingerprint Kopia API Server Certificate Secret Data")
+		return "", errkit.Wrap(err, "Failed to extract fingerprint Kopia API Server Certificate Secret Data")
 	}
 
 	return fingerprint, nil
@@ -134,14 +135,14 @@ func ExtractFingerprintFromCertificateJSON(cert string) (string, error) {
 func ExtractFingerprintFromCertificate(cert string) (string, error) {
 	fingerprint, err := extractFingerprintFromSliceOfBytes([]byte(cert))
 	if err != nil {
-		return "", errors.Wrap(err, "Failed to extract fingerprint Kopia API Server Certificate Secret Data")
+		return "", errkit.Wrap(err, "Failed to extract fingerprint Kopia API Server Certificate Secret Data")
 	}
 
 	return fingerprint, nil
 }
 
-// getStreamingFileObjectIDFromSnapshot returns the kopia object ID of the fs.StreamingFile object from the repository
-func getStreamingFileObjectIDFromSnapshot(ctx context.Context, rep repo.Repository, path, backupID string) (object.ID, error) {
+// GetStreamingFileObjectIDFromSnapshot returns the kopia object ID of the fs.StreamingFile object from the repository
+func GetStreamingFileObjectIDFromSnapshot(ctx context.Context, rep repo.Repository, path, backupID string) (object.ID, error) {
 	// Example: if the path from the blueprint is `/mysql-backups/1/2/mysqldump.sql`, the given backupID
 	// belongs to the root entry `/mysql-backups/1/2` with `mysqldump.sql` as a nested entry.
 	// The goal here is to find the nested entry and extract the object ID
@@ -149,22 +150,22 @@ func getStreamingFileObjectIDFromSnapshot(ctx context.Context, rep repo.Reposito
 	// Load the kopia snapshot with the given backupID
 	m, err := snapshot.LoadSnapshot(ctx, rep, manifest.ID(backupID))
 	if err != nil {
-		return "", errors.Wrapf(err, "Failed to load kopia snapshot with ID: %v", backupID)
+		return object.ID{}, errkit.Wrap(err, "Failed to load kopia snapshot with ID", "backupId", backupID)
 	}
 
 	// root entry of the kopia snapshot is a static directory with filepath.Dir(path) as its path
 	if m.RootEntry == nil {
-		return "", errors.New("No root entry found in kopia manifest")
+		return object.ID{}, errkit.New("No root entry found in kopia manifest")
 	}
 	rootEntry, err := snapshotfs.SnapshotRoot(rep, m)
 	if err != nil {
-		return "", errors.Wrapf(err, "Failed to get root entry from kopia snapshot with ID: %v", backupID)
+		return object.ID{}, errkit.Wrap(err, "Failed to get root entry from kopia snapshot with ID", "backupId", backupID)
 	}
 
 	// Get the nested entry belonging to the backed up streaming file and return its object ID
 	e, err := snapshotfs.GetNestedEntry(ctx, rootEntry, []string{filepath.Base(path)})
 	if err != nil {
-		return "", errors.Wrapf(err, "Failed to get nested entry from kopia snapshot: %v", filepath.Base(path))
+		return object.ID{}, errkit.Wrap(err, "Failed to get nested entry from kopia snapshot", "pathBase", filepath.Base(path))
 	}
 
 	return e.(object.HasObjectID).ObjectID(), nil
@@ -192,24 +193,10 @@ func GetDataStoreGeneralMetadataCacheSize(opt map[string]int) int {
 	return defaultDataStoreGeneralMetadataCacheSizeMB
 }
 
-// MarshalKopiaSnapshot encodes kopia SnapshotInfo struct into a string
-func MarshalKopiaSnapshot(snapInfo *SnapshotInfo) (string, error) {
-	if err := snapInfo.Validate(); err != nil {
-		return "", err
-	}
-	snap, err := json.Marshal(snapInfo)
-	if err != nil {
-		return "", errors.Wrap(err, "failed to marshal kopia snapshot information")
-	}
-
-	return string(snap), nil
-}
-
-// UnmarshalKopiaSnapshot decodes a kopia snapshot JSON string into SnapshotInfo struct
-func UnmarshalKopiaSnapshot(snapInfoJSON string) (SnapshotInfo, error) {
-	snap := SnapshotInfo{}
-	if err := json.Unmarshal([]byte(snapInfoJSON), &snap); err != nil {
-		return snap, errors.Wrap(err, "failed to unmarshal kopia snapshot information")
-	}
-	return snap, snap.Validate()
+// CustomConfigFileAndLogDirectory returns a config file path and log directory based on the hostname
+func CustomConfigFileAndLogDirectory(hostname string) (string, string) {
+	hostname = strings.ReplaceAll(hostname, ".", "-")
+	configFile := filepath.Join(kopiacmd.DefaultConfigDirectory, hostname+".config")
+	logDir := filepath.Join(kopiacmd.DefaultLogDirectory, hostname)
+	return configFile, logDir
 }

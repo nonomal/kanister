@@ -21,9 +21,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kanisterio/errkit"
 	osversioned "github.com/openshift/client-go/apps/clientset/versioned"
-	"github.com/pkg/errors"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -46,6 +46,7 @@ type PostgreSQLDepConfig struct {
 	namespace      string
 	opeshiftClient openshift.OSClient
 	envVar         map[string]string
+	params         map[string]string
 	storageType    storage
 	// dbTemplateVersion will most probably match with the OCP version
 	dbTemplateVersion DBTemplate
@@ -57,6 +58,10 @@ func NewPostgreSQLDepConfig(name string, templateVersion DBTemplate, storageType
 		opeshiftClient: openshift.NewOpenShiftClient(),
 		envVar: map[string]string{
 			"POSTGRESQL_ADMIN_PASSWORD": "secretpassword",
+		},
+		params: map[string]string{
+			"POSTGRESQL_VERSION":  "13-el8",
+			"POSTGRESQL_DATABASE": "postgres",
 		},
 		storageType:       storageType,
 		dbTemplateVersion: templateVersion,
@@ -83,9 +88,9 @@ func (pgres *PostgreSQLDepConfig) Install(ctx context.Context, namespace string)
 
 	dbTemplate := getOpenShiftDBTemplate(postgresDepConfigName, pgres.dbTemplateVersion, pgres.storageType)
 
-	_, err := pgres.opeshiftClient.NewApp(ctx, pgres.namespace, dbTemplate, pgres.envVar, nil)
+	_, err := pgres.opeshiftClient.NewApp(ctx, pgres.namespace, dbTemplate, pgres.envVar, pgres.params)
 	if err != nil {
-		return errors.Wrapf(err, "Error installing application %s on openshift cluster", pgres.name)
+		return errkit.Wrap(err, "Error installing application on openshift cluster", "app", pgres.name)
 	}
 	// The secret that get created after installation doesnt have the creds that are mentioned in the
 	// POSTGRESQL_ADMIN_PASSWORD above, we are creating another secret that will have this detail
@@ -94,7 +99,7 @@ func (pgres *PostgreSQLDepConfig) Install(ctx context.Context, namespace string)
 }
 
 func (pgres *PostgreSQLDepConfig) createPostgreSQLSecret(ctx context.Context) error {
-	postgreSQLSecret := &v1.Secret{
+	postgreSQLSecret := &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
 			APIVersion: "v1",
@@ -110,7 +115,7 @@ func (pgres *PostgreSQLDepConfig) createPostgreSQLSecret(ctx context.Context) er
 
 	_, err := pgres.cli.CoreV1().Secrets(pgres.namespace).Create(ctx, postgreSQLSecret, metav1.CreateOptions{})
 
-	return errors.Wrapf(err, "Error creating secret for mysqldepconf app.")
+	return errkit.Wrap(err, "Error creating secret for mysqldepconf app.")
 }
 
 func (pgres *PostgreSQLDepConfig) IsReady(ctx context.Context) (bool, error) {
@@ -120,7 +125,7 @@ func (pgres *PostgreSQLDepConfig) IsReady(ctx context.Context) (bool, error) {
 
 	err := kube.WaitOnDeploymentConfigReady(ctx, pgres.osCli, pgres.cli, pgres.namespace, postgresDepConfigName)
 	if err != nil {
-		return false, errors.Wrapf(err, "Error %s waiting for application to be ready.", pgres.name)
+		return false, errkit.Wrap(err, "Error waiting for application to be ready.", "app", pgres.name)
 	}
 
 	log.Print("Application is ready", field.M{"app": pgres.name})
@@ -148,17 +153,17 @@ func (pgres *PostgreSQLDepConfig) Ping(ctx context.Context) error {
 	cmd := "pg_isready -U 'postgres' -h 127.0.0.1 -p 5432"
 	_, stderr, err := pgres.execCommand(ctx, []string{"bash", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to ping postgresql deployment config DB. %s", stderr)
+		return errkit.Wrap(err, "Failed to ping postgresql deployment config DB", "stderr", stderr)
 	}
 	log.Info().Print("Connected to database.", field.M{"app": pgres.name})
 	return nil
 }
 
 func (pgres *PostgreSQLDepConfig) Insert(ctx context.Context) error {
-	cmd := fmt.Sprintf("psql -d test -c \"INSERT INTO COMPANY (NAME,AGE,CREATED_AT) VALUES ('foo', 32, now());\"")
+	cmd := "psql -d test -c \"INSERT INTO COMPANY (NAME,AGE,CREATED_AT) VALUES ('foo', 32, now());\""
 	_, stderr, err := pgres.execCommand(ctx, []string{"bash", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to create db in postgresql deployment config. %s", stderr)
+		return errkit.Wrap(err, "Failed to create db in postgresql deployment config", "stderr", stderr)
 	}
 	log.Info().Print("Inserted a row in test db.", field.M{"app": pgres.name})
 	return nil
@@ -168,16 +173,16 @@ func (pgres *PostgreSQLDepConfig) Count(ctx context.Context) (int, error) {
 	cmd := "psql -d test -c 'SELECT COUNT(*) FROM company;'"
 	stdout, stderr, err := pgres.execCommand(ctx, []string{"bash", "-c", cmd})
 	if err != nil {
-		return 0, errors.Wrapf(err, "Failed to count db entries in postgresql deployment config. %s ", stderr)
+		return 0, errkit.Wrap(err, "Failed to count db entries in postgresql deployment config", "stderr", stderr)
 	}
 
 	out := strings.Fields(stdout)
 	if len(out) < 4 {
-		return 0, fmt.Errorf("Unknown response for count query")
+		return 0, errkit.New("unknown response for count query")
 	}
 	count, err := strconv.Atoi(out[2])
 	if err != nil {
-		return 0, errors.Wrapf(err, "Failed to count db entries in postgresql deployment config. %s ", stderr)
+		return 0, errkit.Wrap(err, "Failed to count db entries in postgresql deployment config", "stderr", stderr)
 	}
 	log.Info().Print("Counting rows in test db.", field.M{"app": pgres.name, "count": count})
 	return count, nil
@@ -187,7 +192,7 @@ func (pgres *PostgreSQLDepConfig) Reset(ctx context.Context) error {
 	cmd := "psql -c 'DROP DATABASE IF EXISTS test;'"
 	_, stderr, err := pgres.execCommand(ctx, []string{"bash", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to drop db from postgresql deployment config. %s ", stderr)
+		return errkit.Wrap(err, "Failed to drop db from postgresql deployment config", "stderr", stderr)
 	}
 
 	log.Info().Print("Database reset successful!", field.M{"app": pgres.name})
@@ -200,14 +205,14 @@ func (pgres *PostgreSQLDepConfig) Initialize(ctx context.Context) error {
 	cmd := "psql -c 'CREATE DATABASE test;'"
 	_, stderr, err := pgres.execCommand(ctx, []string{"bash", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to create db in postgresql deployment config %s ", stderr)
+		return errkit.Wrap(err, "Failed to create db in postgresql deployment config", "stderr", stderr)
 	}
 
 	// Create table
 	cmd = "psql -d test -c 'CREATE TABLE COMPANY(ID SERIAL PRIMARY KEY NOT NULL, NAME TEXT NOT NULL, AGE INT NOT NULL, CREATED_AT TIMESTAMP);'"
 	_, stderr, err = pgres.execCommand(ctx, []string{"bash", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to create table in postgresql deployment config %s ", stderr)
+		return errkit.Wrap(err, "Failed to create table in postgresql deployment config", "stderr", stderr)
 	}
 	return nil
 }
@@ -218,5 +223,5 @@ func (pgres *PostgreSQLDepConfig) execCommand(ctx context.Context, command []str
 	if err != nil {
 		return "", "", err
 	}
-	return kube.Exec(pgres.cli, pgres.namespace, pod, container, command, nil)
+	return kube.Exec(ctx, pgres.cli, pgres.namespace, pod, container, command, nil)
 }

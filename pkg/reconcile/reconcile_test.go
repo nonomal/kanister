@@ -19,8 +19,8 @@ import (
 	"sync"
 	"testing"
 
-	. "gopkg.in/check.v1"
-	v1 "k8s.io/api/core/v1"
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -31,7 +31,7 @@ import (
 )
 
 // Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) { TestingT(t) }
+func Test(t *testing.T) { check.TestingT(t) }
 
 type ReconcileSuite struct {
 	cli       kubernetes.Interface
@@ -40,28 +40,28 @@ type ReconcileSuite struct {
 	as        *crv1alpha1.ActionSet
 }
 
-var _ = Suite(&ReconcileSuite{})
+var _ = check.Suite(&ReconcileSuite{})
 
-func (s *ReconcileSuite) SetUpSuite(c *C) {
+func (s *ReconcileSuite) SetUpSuite(c *check.C) {
 	// Setup Clients
 	config, err := kube.LoadConfig()
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 	cli, err := kubernetes.NewForConfig(config)
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 	s.cli = cli
 
 	crCli, err := crclientv1alpha1.NewForConfig(config)
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 	s.crCli = crCli
 
 	// Create Namespace
-	ns := &v1.Namespace{
+	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "reconciletest-",
 		},
 	}
 	cns, err := cli.CoreV1().Namespaces().Create(context.TODO(), ns, metav1.CreateOptions{})
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 	s.namespace = cns.Name
 
 	// Create ActionSet
@@ -71,7 +71,7 @@ func (s *ReconcileSuite) SetUpSuite(c *C) {
 		},
 		Spec: &crv1alpha1.ActionSetSpec{
 			Actions: []crv1alpha1.ActionSpec{
-				crv1alpha1.ActionSpec{
+				{
 					Object: crv1alpha1.ObjectReference{
 						Name: "foo",
 						Kind: param.StatefulSetKind,
@@ -81,12 +81,12 @@ func (s *ReconcileSuite) SetUpSuite(c *C) {
 		},
 		Status: &crv1alpha1.ActionSetStatus{
 			Actions: []crv1alpha1.ActionStatus{
-				crv1alpha1.ActionStatus{
+				{
 					Phases: []crv1alpha1.Phase{
-						crv1alpha1.Phase{
+						{
 							State: crv1alpha1.StatePending,
 						},
-						crv1alpha1.Phase{
+						{
 							State: crv1alpha1.StatePending,
 						},
 					},
@@ -96,35 +96,35 @@ func (s *ReconcileSuite) SetUpSuite(c *C) {
 		},
 	}
 	as, err = s.crCli.ActionSets(s.namespace).Create(context.TODO(), as, metav1.CreateOptions{})
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 	s.as = as
 }
 
-func (s *ReconcileSuite) TearDownSuite(c *C) {
+func (s *ReconcileSuite) TearDownSuite(c *check.C) {
 	if s.namespace != "" {
 		_ = s.cli.CoreV1().Namespaces().Delete(context.TODO(), s.namespace, metav1.DeleteOptions{})
 	}
 }
 
-func (s *ReconcileSuite) TestSetFailed(c *C) {
+func (s *ReconcileSuite) TestSetFailed(c *check.C) {
 	ctx := context.Background()
 	err := ActionSet(ctx, s.crCli, s.namespace, s.as.GetName(), func(as *crv1alpha1.ActionSet) error {
 		as.Status.Actions[0].Phases[0].State = crv1alpha1.StateFailed
 		as.Status.State = crv1alpha1.StateFailed
 		return nil
 	})
-	c.Assert(err, IsNil)
+	c.Assert(err, check.IsNil)
 
 	as, err := s.crCli.ActionSets(s.namespace).Get(ctx, s.as.GetName(), metav1.GetOptions{})
-	c.Assert(err, IsNil)
-	c.Assert(as.Status.State, Equals, crv1alpha1.StateFailed)
+	c.Assert(err, check.IsNil)
+	c.Assert(as.Status.State, check.Equals, crv1alpha1.StateFailed)
 }
 
 // Tested with 30, but it took 20 seconds to run. This takes 2 seconds and we
 // still see conflicts.
 const numParallel = 5
 
-func (s *ReconcileSuite) TestHandleConflict(c *C) {
+func (s *ReconcileSuite) TestHandleConflict(c *check.C) {
 	ctx := context.Background()
 	wg := sync.WaitGroup{}
 	for range make([]struct{}, numParallel) {
@@ -136,7 +136,7 @@ func (s *ReconcileSuite) TestHandleConflict(c *C) {
 				as.Status.State = crv1alpha1.StateFailed
 				return nil
 			})
-			c.Assert(err, IsNil)
+			c.Assert(err, check.IsNil)
 		}()
 	}
 	wg.Wait()

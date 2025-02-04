@@ -17,15 +17,19 @@ package function
 import (
 	"context"
 	"fmt"
+	"time"
 
 	v1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
-	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/kube/snapshot"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -55,13 +59,19 @@ const (
 	CreateCSISnapshotSnapshotContentNameArg = "snapshotContent"
 )
 
-type createCSISnapshotFunc struct{}
+type createCSISnapshotFunc struct {
+	progressPercent string
+}
 
 func (*createCSISnapshotFunc) Name() string {
 	return CreateCSISnapshotFuncName
 }
 
-func (*createCSISnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (c *createCSISnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	c.progressPercent = progress.StartedPercent
+	defer func() { c.progressPercent = progress.CompletedPercent }()
+
 	var snapshotClass string
 	var labels map[string]string
 	var name, pvc, namespace string
@@ -89,14 +99,7 @@ func (*createCSISnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams,
 	if err != nil {
 		return nil, err
 	}
-	snapshotter, err := snapshot.NewSnapshotter(kubeCli, dynCli)
-	if err != nil {
-		if errors.Is(context.DeadlineExceeded, err) {
-			timeoutMsg := "SnapshotContent not provisioned within given timeout. Please check if CSI driver is installed correctly and supports VolumeSnapshot feature"
-			return nil, errors.Wrap(err, timeoutMsg)
-		}
-		return nil, err
-	}
+	snapshotter := snapshot.NewSnapshotter(kubeCli, dynCli)
 	// waitForReady is set to true by default because snapshot information is needed as output artifacts
 	waitForReady := true
 	vs, err := createCSISnapshot(ctx, snapshotter, name, namespace, pvc, snapshotClass, waitForReady, labels)
@@ -132,8 +135,22 @@ func (*createCSISnapshotFunc) Arguments() []string {
 	}
 }
 
+func (c *createCSISnapshotFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(c.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(c.RequiredArgs(), args)
+}
+
 func createCSISnapshot(ctx context.Context, snapshotter snapshot.Snapshotter, name, namespace, pvc, snapshotClass string, wait bool, labels map[string]string) (*v1.VolumeSnapshot, error) {
-	if err := snapshotter.Create(ctx, name, namespace, pvc, &snapshotClass, wait, labels); err != nil {
+	snapshotMeta := snapshot.ObjectMeta{
+		Name:        name,
+		Namespace:   namespace,
+		Labels:      labels,
+		Annotations: nil,
+	}
+	if err := snapshotter.Create(ctx, pvc, &snapshotClass, wait, snapshotMeta); err != nil {
 		return nil, err
 	}
 	vs, err := snapshotter.Get(ctx, name, namespace)
@@ -146,4 +163,12 @@ func createCSISnapshot(ctx context.Context, snapshotter snapshot.Snapshotter, na
 // defaultSnapshotName generates snapshot name using <pvcName>-snapshot-<randomValue>
 func defaultSnapshotName(pvcName string, len int) string {
 	return fmt.Sprintf("%s-snapshot-%s", pvcName, rand.String(len))
+}
+
+func (c *createCSISnapshotFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    c.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
 }

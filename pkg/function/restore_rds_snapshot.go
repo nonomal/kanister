@@ -17,17 +17,25 @@ package function
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	rdserr "github.com/aws/aws-sdk-go/service/rds"
 	"github.com/hashicorp/go-version"
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/aws/rds"
 	"github.com/kanisterio/kanister/pkg/field"
 	"github.com/kanisterio/kanister/pkg/log"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/postgres"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -57,11 +65,14 @@ const (
 	RestoreRDSSnapshotSecGrpID = "securityGroupID"
 	// RestoreRDSSnapshotEndpoint to set endpoint of restored rds instance
 	RestoreRDSSnapshotEndpoint = "endpoint"
-
+	// RestoreRDSSnapshotDBSubnetGroup is the dbSubnetGroup of the restored RDS instance
+	RestoreRDSSnapshotDBSubnetGroup = "dbSubnetGroup"
 	// RestoreRDSSnapshotUsername stores username of the database
 	RestoreRDSSnapshotUsername = "username"
 	// RestoreRDSSnapshotPassword stores the password of the database
 	RestoreRDSSnapshotPassword = "password"
+	// RestoreRDSSnapshotImage provides the image of the container with required tools
+	RestoreRDSSnapshotImage = "image"
 
 	// PostgreSQLEngine stores the postgres appname
 	PostgreSQLEngine RDSDBEngine = "PostgreSQL"
@@ -71,7 +82,9 @@ const (
 	RDSPostgresDBInstanceEngineVersion = "13.0"
 )
 
-type restoreRDSSnapshotFunc struct{}
+type restoreRDSSnapshotFunc struct {
+	progressPercent string
+}
 
 func (*restoreRDSSnapshotFunc) Name() string {
 	return RestoreRDSSnapshotFuncName
@@ -92,12 +105,35 @@ func (*restoreRDSSnapshotFunc) Arguments() []string {
 		RestoreRDSSnapshotPassword,
 		RestoreRDSSnapshotNamespace,
 		RestoreRDSSnapshotSecGrpID,
+		RestoreRDSSnapshotDBSubnetGroup,
+		PodAnnotationsArg,
+		PodLabelsArg,
+		CredentialsSourceArg,
+		CredentialsSecretArg,
+		RegionArg,
 	}
 }
 
-func (*restoreRDSSnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
-	var namespace, instanceID, snapshotID, backupArtifactPrefix, backupID, username, password string
+func (r *restoreRDSSnapshotFunc) Validate(args map[string]any) error {
+	if err := ValidatePodLabelsAndAnnotations(r.Name(), args); err != nil {
+		return err
+	}
+
+	if err := utils.CheckSupportedArgs(r.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(r.RequiredArgs(), args)
+}
+
+func (r *restoreRDSSnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	r.progressPercent = progress.StartedPercent
+	defer func() { r.progressPercent = progress.CompletedPercent }()
+
+	var namespace, instanceID, subnetGroup, snapshotID, backupArtifactPrefix, backupID, username, password, postgresToolsImage string
 	var dbEngine RDSDBEngine
+	var bpAnnotations, bpLabels map[string]string
 
 	if err := Arg(args, RestoreRDSSnapshotInstanceID, &instanceID); err != nil {
 		return nil, err
@@ -110,6 +146,38 @@ func (*restoreRDSSnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams
 	if err := OptArg(args, RestoreRDSSnapshotDBEngine, &dbEngine, ""); err != nil {
 		return nil, err
 	}
+	if err := OptArg(args, RestoreRDSSnapshotDBSubnetGroup, &subnetGroup, "default"); err != nil {
+		return nil, err
+	}
+	if err := OptArg(args, RestoreRDSSnapshotImage, &postgresToolsImage, defaultPostgresToolsImage); err != nil {
+		return nil, err
+	}
+	if err := OptArg(args, PodAnnotationsArg, &bpAnnotations, nil); err != nil {
+		return nil, err
+	}
+	if err := OptArg(args, PodLabelsArg, &bpLabels, nil); err != nil {
+		return nil, err
+	}
+
+	credentialsSource, err := parseCredentialsSource(args)
+	if err != nil {
+		return nil, err
+	}
+
+	annotations := bpAnnotations
+	labels := bpLabels
+	if tp.PodAnnotations != nil {
+		// merge the actionset annotations with blueprint annotations
+		var actionSetAnn ActionSetAnnotations = tp.PodAnnotations
+		annotations = actionSetAnn.MergeBPAnnotations(bpAnnotations)
+	}
+
+	if tp.PodLabels != nil {
+		// merge the actionset labels with blueprint labels
+		var actionSetLabels ActionSetLabels = tp.PodLabels
+		labels = actionSetLabels.MergeBPLabels(bpLabels)
+	}
+
 	// Find security groups
 	sgIDs, err := GetYamlList(args, RestoreRDSSnapshotSecGrpID)
 	if err != nil {
@@ -136,50 +204,107 @@ func (*restoreRDSSnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams
 		}
 	}
 
-	return restoreRDSSnapshot(ctx, namespace, instanceID, snapshotID, backupArtifactPrefix, backupID, username, password, dbEngine, sgIDs, tp.Profile)
+	return restoreRDSSnapshot(
+		ctx,
+		namespace,
+		instanceID,
+		subnetGroup,
+		snapshotID,
+		backupArtifactPrefix,
+		backupID,
+		username,
+		password,
+		dbEngine,
+		sgIDs,
+		*credentialsSource,
+		tp,
+		postgresToolsImage,
+		annotations,
+		labels,
+	)
 }
 
-func restoreRDSSnapshot(ctx context.Context, namespace, instanceID, snapshotID, backupArtifactPrefix, backupID, username, password string, dbEngine RDSDBEngine, sgIDs []string, profile *param.Profile) (map[string]interface{}, error) {
+func (r *restoreRDSSnapshotFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    r.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
+}
+
+func restoreRDSSnapshot(
+	ctx context.Context,
+	namespace,
+	instanceID,
+	subnetGroup,
+	snapshotID,
+	backupArtifactPrefix,
+	backupID,
+	username,
+	password string,
+	dbEngine RDSDBEngine,
+	sgIDs []string,
+	credentialsSource awsCredentialsSource,
+	tp param.TemplateParams,
+	postgresToolsImage string,
+	annotations,
+	labels map[string]string,
+) (map[string]interface{}, error) {
+	profile := tp.Profile
 	// Validate profile
 	if err := ValidateProfile(profile); err != nil {
-		return nil, errors.Wrap(err, "Error validating profile")
+		return nil, errkit.Wrap(err, "Error validating profile")
 	}
 
-	awsConfig, region, err := getAWSConfigFromProfile(ctx, profile)
+	awsConfig, region, err := getAwsConfig(ctx, credentialsSource, tp)
+
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get AWS creds from profile")
+		return nil, errkit.Wrap(err, "Failed to get AWS creds")
 	}
 
 	// Create rds client
 	rdsCli, err := rds.NewClient(ctx, awsConfig, region)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to create RDS client")
+		return nil, errkit.Wrap(err, "Failed to create RDS client")
 	}
 
-	// Restore from snapshot
 	if snapshotID != "" {
+		// Restore from snapshot
 		// If securityGroupID arg is nil, we will try to find the sgIDs by describing the existing instance
 		// Find security group ids
 		if sgIDs == nil {
-			if !isAuroraCluster(string(dbEngine)) {
-				sgIDs, err = findSecurityGroups(ctx, rdsCli, instanceID)
-			} else {
-				sgIDs, err = findAuroraSecurityGroups(ctx, rdsCli, instanceID)
-			}
+			sgIDs, err = findSecurityGroupIDs(ctx, rdsCli, instanceID, string(dbEngine))
 			if err != nil {
-				return nil, errors.Wrapf(err, "Failed to fetch security group ids. InstanceID=%s", instanceID)
+				return nil, errkit.Wrap(err, "Failed to fetch security group ids. InstanceID=", "instanceID=", instanceID)
 			}
 		}
 		if !isAuroraCluster(string(dbEngine)) {
-			return nil, restoreFromSnapshot(ctx, rdsCli, instanceID, snapshotID, sgIDs)
+			return nil, restoreFromSnapshot(ctx, rdsCli, instanceID, subnetGroup, snapshotID, sgIDs)
 		}
-		return nil, restoreAuroraFromSnapshot(ctx, rdsCli, instanceID, snapshotID, string(dbEngine), sgIDs)
+		return nil, restoreAuroraFromSnapshot(ctx, rdsCli, instanceID, subnetGroup, snapshotID, string(dbEngine), sgIDs)
+	} else {
+		// Restore from dump
+		return restoreFromDump(ctx, namespace, instanceID, backupArtifactPrefix, backupID, username, password, dbEngine, profile, postgresToolsImage, annotations, labels, rdsCli)
 	}
+}
 
-	// Restore from dump
+func restoreFromDump(ctx context.Context,
+	namespace,
+	instanceID,
+	backupArtifactPrefix,
+	backupID,
+	username,
+	password string,
+	dbEngine RDSDBEngine,
+	profile *param.Profile,
+	postgresToolsImage string,
+	annotations,
+	labels map[string]string,
+	rdsCli *rds.RDS,
+) (map[string]interface{}, error) {
 	descOp, err := rdsCli.DescribeDBInstances(ctx, instanceID)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to describe DB instance. InstanceID=%s", instanceID)
+		return nil, errkit.Wrap(err, "Failed to describe DB instance. InstanceID=", "instanceID=", instanceID)
 	}
 
 	dbEndpoint := *descOp.DBInstances[0].Endpoint.Address
@@ -187,11 +312,27 @@ func restoreRDSSnapshot(ctx context.Context, namespace, instanceID, snapshotID, 
 	// get the engine version
 	dbEngineVersion, err := rdsDBEngineVersion(ctx, rdsCli, instanceID)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Couldn't find DBInstance Version")
+		return nil, errkit.Wrap(err, "Couldn't find DBInstance Version")
 	}
 
-	if _, err = execDumpCommand(ctx, dbEngine, RestoreAction, namespace, dbEndpoint, username, password, nil, backupArtifactPrefix, backupID, profile, dbEngineVersion); err != nil {
-		return nil, errors.Wrapf(err, "Failed to restore RDS from dump. InstanceID=%s", instanceID)
+	if _, err = execDumpCommand(
+		ctx,
+		dbEngine,
+		RestoreAction,
+		namespace,
+		dbEndpoint,
+		username,
+		password,
+		nil,
+		backupArtifactPrefix,
+		backupID,
+		profile,
+		dbEngineVersion,
+		postgresToolsImage,
+		annotations,
+		labels,
+	); err != nil {
+		return nil, errkit.Wrap(err, "Failed to restore RDS from dump. InstanceID=", "instanceID=", instanceID)
 	}
 
 	return map[string]interface{}{
@@ -199,27 +340,33 @@ func restoreRDSSnapshot(ctx context.Context, namespace, instanceID, snapshotID, 
 	}, nil
 }
 
-// nolint:unparam
-func postgresRestoreCommand(pgHost, username, password string, dbList []string, backupArtifactPrefix, backupID string, profile []byte, dbEngineVersion string) ([]string, error) {
-	replaceCommand := ""
-	if len(dbList) == 0 {
-		return nil, errors.New("No database found. Atleast one db needed to connect")
+func findSecurityGroupIDs(ctx context.Context, rdsCli *rds.RDS, instanceID, dbEngine string) ([]string, error) {
+	if !isAuroraCluster(dbEngine) {
+		return findSecurityGroups(ctx, rdsCli, instanceID)
 	}
+	return findAuroraSecurityGroups(ctx, rdsCli, instanceID)
+}
+
+//nolint:unparam
+func postgresRestoreCommand(pgHost, username, password string, backupArtifactPrefix, backupID string, profile []byte, dbEngineVersion string) ([]string, error) {
+	replaceCommand := ""
 
 	// check if PostgresDB version < 13
 	v1, err := version.NewVersion(dbEngineVersion)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Couldn't find DBInstance Version")
+		return nil, errkit.Wrap(err, "Couldn't find DBInstance Version")
 	}
 	// Add Constraints
 	constraints, err := version.NewConstraint("< " + RDSPostgresDBInstanceEngineVersion)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Couldn't add constraint to DBInstance Version")
+		return nil, errkit.Wrap(err, "Couldn't add constraint to DBInstance Version")
 	}
 	// Verify Constraints
 	if constraints.Check(v1) {
-		replaceCommand = " sed 's/LOCALE/LC_COLLATE/' |"
+		replaceCommand = ` sed 's/"LOCALE"/"LC_COLLATE"/' |`
 	}
+
+	profileQuoted := strconv.Quote(string(profile))
 
 	return []string{
 		"bash",
@@ -230,12 +377,12 @@ func postgresRestoreCommand(pgHost, username, password string, dbList []string, 
 		"-c",
 		fmt.Sprintf(`
 		export PGHOST=%s
-		kando location pull --profile '%s' --path "%s" - | gunzip -c -f |%s psql -q -U "${PGUSER}" %s
-		`, pgHost, profile, fmt.Sprintf("%s/%s", backupArtifactPrefix, backupID), replaceCommand, dbList[0]),
+		kando location pull --profile %s --path "%s" - | gunzip -c -f |%s psql -q -U "${PGUSER}" %s
+		`, pgHost, profileQuoted, fmt.Sprintf("%s/%s", backupArtifactPrefix, backupID), replaceCommand, postgres.DefaultConnectDatabase),
 	}, nil
 }
 
-func restoreFromSnapshot(ctx context.Context, rdsCli *rds.RDS, instanceID, snapshotID string, securityGrpIDs []string) error {
+func restoreFromSnapshot(ctx context.Context, rdsCli *rds.RDS, instanceID, subnetGroup, snapshotID string, securityGrpIDs []string) error {
 	log.WithContext(ctx).Print("Deleting existing RDS DB instance.", field.M{"instanceID": instanceID})
 	if _, err := rdsCli.DeleteDBInstance(ctx, instanceID); err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
@@ -248,23 +395,23 @@ func restoreFromSnapshot(ctx context.Context, rdsCli *rds.RDS, instanceID, snaps
 		log.WithContext(ctx).Print("Waiting for RDS DB instance to be deleted.", field.M{"instanceID": instanceID})
 		// Wait for the instance to be deleted
 		if err := rdsCli.WaitUntilDBInstanceDeleted(ctx, instanceID); err != nil {
-			return errors.Wrapf(err, "Error while waiting RDS DB instance to be deleted")
+			return errkit.Wrap(err, "Error while waiting RDS DB instance to be deleted")
 		}
 	}
 
 	log.WithContext(ctx).Print("Restoring RDS DB instance from snapshot.", field.M{"instanceID": instanceID, "snapshotID": snapshotID})
 	// Restore from snapshot
-	if _, err := rdsCli.RestoreDBInstanceFromDBSnapshot(ctx, instanceID, snapshotID, securityGrpIDs); err != nil {
-		return errors.Wrapf(err, "Error restoring RDS DB instance from snapshot")
+	if _, err := rdsCli.RestoreDBInstanceFromDBSnapshot(ctx, instanceID, subnetGroup, snapshotID, securityGrpIDs); err != nil {
+		return errkit.Wrap(err, "Error restoring RDS DB instance from snapshot")
 	}
 
 	// Wait for instance to be ready
 	log.WithContext(ctx).Print("Waiting for RDS DB instance database to be ready.", field.M{"instanceID": instanceID})
 	err := rdsCli.WaitUntilDBInstanceAvailable(ctx, instanceID)
-	return errors.Wrap(err, "Error while waiting for new rds instance to be ready.")
+	return errkit.Wrap(err, "Error while waiting for new rds instance to be ready.")
 }
 
-func restoreAuroraFromSnapshot(ctx context.Context, rdsCli *rds.RDS, instanceID, snapshotID, dbEngine string, securityGroupIDs []string) error {
+func restoreAuroraFromSnapshot(ctx context.Context, rdsCli *rds.RDS, instanceID, subnetGroup, snapshotID, dbEngine string, securityGroupIDs []string) error {
 	// To delete an Aurora RDS instance we will have to delete all the instance that are running through it
 	// Once all those instances are deleted, Aurora cluster will be deleted automatically
 	descOp, err := rdsCli.DescribeDBClusters(ctx, instanceID)
@@ -284,32 +431,44 @@ func restoreAuroraFromSnapshot(ctx context.Context, rdsCli *rds.RDS, instanceID,
 
 	version, err := engineVersion(ctx, rdsCli, snapshotID)
 	if err != nil {
-		return errors.Wrap(err, "Error getting the engine version before restore")
+		return errkit.Wrap(err, "Error getting the engine version before restore")
 	}
 
 	log.WithContext(ctx).Print("Restoring RDS Aurora DB Cluster from snapshot.", field.M{"instanceID": instanceID, "snapshotID": snapshotID})
-	op, err := rdsCli.RestoreDBClusterFromDBSnapshot(ctx, instanceID, snapshotID, dbEngine, version, securityGroupIDs)
+	op, err := rdsCli.RestoreDBClusterFromDBSnapshot(ctx, instanceID, subnetGroup, snapshotID, dbEngine, version, securityGroupIDs)
 	if err != nil {
-		return errors.Wrap(err, "Error restorig aurora db cluster from snapshot")
+		return errkit.Wrap(err, "Error restorig aurora db cluster from snapshot")
 	}
 
 	// From docs: Above action only restores the DB cluster, not the DB instances for that DB cluster
 	// wait for db cluster to be available
 	log.WithContext(ctx).Print("Waiting for db cluster to be available")
 	if err := rdsCli.WaitUntilDBClusterAvailable(ctx, *op.DBCluster.DBClusterIdentifier); err != nil {
-		return errors.Wrap(err, "Error waiting for DBCluster to be available")
+		return errkit.Wrap(err, "Error waiting for DBCluster to be available")
 	}
 
 	log.WithContext(ctx).Print("Creating DB instance in the cluster")
-	// After Aurora cluster is created, we will have to explictly create the DB instance
-	dbInsOp, err := rdsCli.CreateDBInstanceInCluster(ctx, *op.DBCluster.DBClusterIdentifier, fmt.Sprintf("%s-%s", *op.DBCluster.DBClusterIdentifier, restoredAuroraInstanceSuffix), defaultAuroraInstanceClass, dbEngine)
+	// After Aurora cluster is created, we will have to explicitly create the DB instance
+	dbInsOp, err := rdsCli.CreateDBInstance(
+		ctx,
+		nil,
+		defaultAuroraInstanceClass,
+		fmt.Sprintf("%s-%s", *op.DBCluster.DBClusterIdentifier, restoredAuroraInstanceSuffix),
+		dbEngine,
+		"",
+		"",
+		nil,
+		nil,
+		aws.String(*op.DBCluster.DBClusterIdentifier),
+		subnetGroup,
+	)
 	if err != nil {
-		return errors.Wrap(err, "Error while creating Aurora DB instance in the cluster.")
+		return errkit.Wrap(err, "Error while creating Aurora DB instance in the cluster.")
 	}
 	// wait for instance to be up and running
 	log.WithContext(ctx).Print("Waiting for RDS Aurora instance to be ready.", field.M{"instanceID": instanceID})
 	if err = rdsCli.WaitUntilDBInstanceAvailable(ctx, *dbInsOp.DBInstance.DBInstanceIdentifier); err != nil {
-		return errors.Wrap(err, "Error while waiting for new RDS Aurora instance to be ready.")
+		return errkit.Wrap(err, "Error while waiting for new RDS Aurora instance to be ready.")
 	}
 	return nil
 }
@@ -325,7 +484,7 @@ func DeleteAuroraDBCluster(ctx context.Context, rdsCli *rds.RDS, descOp *rdserr.
 		} else {
 			log.WithContext(ctx).Print("Waiting for RDS Aurora cluster instance to be deleted", field.M{"instance": k})
 			if err := rdsCli.WaitUntilDBInstanceDeleted(ctx, *member.DBInstanceIdentifier); err != nil {
-				return errors.Wrapf(err, "Error while waiting for RDS Aurora DB instance to be deleted")
+				return errkit.Wrap(err, "Error while waiting for RDS Aurora DB instance to be deleted")
 			}
 		}
 	}
@@ -340,7 +499,7 @@ func DeleteAuroraDBCluster(ctx context.Context, rdsCli *rds.RDS, descOp *rdserr.
 	} else {
 		log.WithContext(ctx).Print("Waiting for RDS Aurora cluster to be deleted.", field.M{"instanceID": instanceID})
 		if err := rdsCli.WaitUntilDBClusterDeleted(ctx, instanceID); err != nil {
-			return errors.Wrapf(err, "Error while waiting RDS Aurora DB cluster to be deleted")
+			return errkit.Wrap(err, "Error while waiting RDS Aurora DB cluster to be deleted")
 		}
 	}
 	return nil

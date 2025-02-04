@@ -19,18 +19,22 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/rand"
+
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	bp "github.com/kanisterio/kanister/pkg/blueprint"
 	"github.com/kanisterio/kanister/pkg/field"
 	"github.com/kanisterio/kanister/pkg/log"
-	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 const (
 	blueprintsRepo = "./blueprints"
+	// imagePrefix specifies the prefix an image is going to have if it's being consumed from
+	// kanister's ghcr registry
+	imagePrefix = "ghcr.io/kanisterio"
 )
 
-// Blueprint implements Blueprint() to return Blueprint specs for the app
+// AppBlueprint implements Blueprint() to return Blueprint specs for the app
 // Blueprint() returns Blueprint placed at ./blueprints/{app-name}-blueprint.yaml
 type AppBlueprint struct {
 	App          string
@@ -87,8 +91,10 @@ func updateImageTags(bp *crv1alpha1.Blueprint) {
 				continue
 			}
 
-			// ghcr.io/kanisterio/tools:v0.xx.x => ghcr.io/kanisterio/tools:v9.99.9-dev
-			phase.Args["image"] = fmt.Sprintf("%s:v9.99.9-dev", strings.Split(imageStr, ":")[0])
+			if strings.HasPrefix(imageStr, imagePrefix) {
+				// ghcr.io/kanisterio/tools:v0.xx.x => ghcr.io/kanisterio/tools:v9.99.9-dev
+				phase.Args["image"] = fmt.Sprintf("%s:v9.99.9-dev", strings.Split(imageStr, ":")[0])
+			}
 
 			// Change imagePullPolicy to Always using podOverride config
 			phase.Args["podOverride"] = crv1alpha1.JSONMap{
@@ -103,7 +109,7 @@ func updateImageTags(bp *crv1alpha1.Blueprint) {
 	}
 }
 
-// Blueprint returns Blueprint placed at ./blueprints/{app-name}-blueprint.yaml
+// NewPITRBlueprint returns blueprint placed at ./blueprints/{app-name}-blueprint.yaml
 func NewPITRBlueprint(app string, bpReposPath string, useDevImages bool) Blueprinter {
 	if bpReposPath == "" {
 		bpReposPath = blueprintsRepo

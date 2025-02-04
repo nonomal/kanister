@@ -17,30 +17,31 @@ package kube
 import (
 	"bytes"
 	"context"
-	. "gopkg.in/check.v1"
 	"text/template"
 
-	"github.com/Masterminds/sprig"
+	"gopkg.in/check.v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/kanisterio/kanister/pkg/ksprig"
 )
 
 type UnstructuredSuite struct{}
 
-var _ = Suite(&UnstructuredSuite{})
+var _ = check.Suite(&UnstructuredSuite{})
 
 type Param struct {
 	Unstructured map[string]interface{}
 }
 
-func (s *UnstructuredSuite) TestFetch(c *C) {
+func (s *UnstructuredSuite) TestFetch(c *check.C) {
 	ctx := context.Background()
 	gvr := schema.GroupVersionResource{
 		Group:    "",
 		Version:  "v1",
-		Resource: "serviceaccounts",
+		Resource: "services",
 	}
-	u, err := FetchUnstructuredObject(ctx, gvr, "default", "default")
-	c.Assert(err, IsNil)
+	u, err := FetchUnstructuredObject(ctx, gvr, "default", "kubernetes")
+	c.Assert(err, check.IsNil)
 
 	buf := bytes.NewBuffer(nil)
 	tp := Param{Unstructured: u.UnstructuredContent()}
@@ -49,12 +50,12 @@ func (s *UnstructuredSuite) TestFetch(c *C) {
 		arg string
 	}{
 		{"{{ .Unstructured.metadata.name }}"},
-		{"{{ index .Unstructured.secrets 0 }}"},
+		{"{{ .Unstructured.spec.clusterIP }}"},
 	} {
-		t, err := template.New("config").Option("missingkey=error").Funcs(sprig.TxtFuncMap()).Parse(tc.arg)
-		c.Assert(err, IsNil)
+		t, err := template.New("config").Option("missingkey=error").Funcs(ksprig.TxtFuncMap()).Parse(tc.arg)
+		c.Assert(err, check.IsNil)
 		err = t.Execute(buf, tp)
-		c.Assert(err, IsNil)
+		c.Assert(err, check.IsNil)
 
 		c.Logf("Template: %s, Value: %s", tc.arg, buf.String())
 	}

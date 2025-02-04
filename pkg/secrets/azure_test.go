@@ -1,24 +1,39 @@
+// Copyright 2023 The Kanister Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package secrets
 
 import (
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/kanisterio/kanister/pkg/objectstore"
-	. "gopkg.in/check.v1"
-	v1 "k8s.io/api/core/v1"
 )
 
 type AzureSecretSuite struct{}
 
-var _ = Suite(&AzureSecretSuite{})
+var _ = check.Suite(&AzureSecretSuite{})
 
-func (s *AzureSecretSuite) TestExtractAzureCredentials(c *C) {
+func (s *AzureSecretSuite) TestExtractAzureCredentials(c *check.C) {
 	for i, tc := range []struct {
-		secret     *v1.Secret
+		secret     *corev1.Secret
 		expected   *objectstore.SecretAzure
-		errChecker Checker
+		errChecker check.Checker
 	}{
 		{
-			secret: &v1.Secret{
-				Type: v1.SecretType(AzureSecretType),
+			secret: &corev1.Secret{
+				Type: corev1.SecretType(AzureSecretType),
 				Data: map[string][]byte{
 					AzureStorageAccountID:   []byte("key_id"),
 					AzureStorageAccountKey:  []byte("secret_key"),
@@ -30,11 +45,11 @@ func (s *AzureSecretSuite) TestExtractAzureCredentials(c *C) {
 				StorageKey:      "secret_key",
 				EnvironmentName: "env",
 			},
-			errChecker: IsNil,
+			errChecker: check.IsNil,
 		},
 		{ // bad type
-			secret: &v1.Secret{
-				Type: v1.SecretType(AWSSecretType),
+			secret: &corev1.Secret{
+				Type: corev1.SecretType(AWSSecretType),
 				Data: map[string][]byte{
 					AzureStorageAccountID:   []byte("key_id"),
 					AzureStorageAccountKey:  []byte("secret_key"),
@@ -42,22 +57,22 @@ func (s *AzureSecretSuite) TestExtractAzureCredentials(c *C) {
 				},
 			},
 			expected:   nil,
-			errChecker: NotNil,
+			errChecker: check.NotNil,
 		},
 		{ // missing field
-			secret: &v1.Secret{
-				Type: v1.SecretType(AzureSecretType),
+			secret: &corev1.Secret{
+				Type: corev1.SecretType(AzureSecretType),
 				Data: map[string][]byte{
 					AzureStorageAccountID:   []byte("key_id"),
 					AzureStorageEnvironment: []byte("env"),
 				},
 			},
 			expected:   nil,
-			errChecker: NotNil,
+			errChecker: check.NotNil,
 		},
 		{ // additional field
-			secret: &v1.Secret{
-				Type: v1.SecretType(AzureSecretType),
+			secret: &corev1.Secret{
+				Type: corev1.SecretType(AzureSecretType),
 				Data: map[string][]byte{
 					AzureStorageAccountID:   []byte("key_id"),
 					AzureStorageAccountKey:  []byte("secret_key"),
@@ -66,11 +81,11 @@ func (s *AzureSecretSuite) TestExtractAzureCredentials(c *C) {
 				},
 			},
 			expected:   nil,
-			errChecker: NotNil,
+			errChecker: check.NotNil,
 		},
 	} {
 		azsecret, err := ExtractAzureCredentials(tc.secret)
-		c.Check(azsecret, DeepEquals, tc.expected, Commentf("test number: %d", i))
+		c.Check(azsecret, check.DeepEquals, tc.expected, check.Commentf("test number: %d", i))
 		c.Check(err, tc.errChecker)
 	}
 }

@@ -1,5 +1,7 @@
-FROM couchbase:enterprise-6.0.3
+FROM couchbase:enterprise-7.6.3
 
-MAINTAINER "Tom Manville <tom@kasten.io>"
+LABEL maintainer="Kanister maintainers<kanister.maintainers@veeam.com>"
 
-ADD kando /usr/local/bin/
+# Install Kanister tools
+RUN apt-get update && apt-get install libdigest-sha-perl -y
+RUN curl https://raw.githubusercontent.com/kanisterio/kanister/master/scripts/get.sh | bash

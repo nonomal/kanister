@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"io/ioutil"
+
+	"github.com/kanisterio/errkit"
 
 	"github.com/kanisterio/kanister/pkg/location"
 	"github.com/kanisterio/kanister/pkg/param"
-	"github.com/pkg/errors"
 )
 
 func Pull(ctx context.Context, target io.Writer, p param.Profile, manifest string) error {
@@ -30,9 +30,9 @@ func Pull(ctx context.Context, target io.Writer, p param.Profile, manifest strin
 	buf := bytes.NewBuffer(nil)
 	_ = location.Read(ctx, buf, p, manifest)
 	// Read Data
-	data, err := ioutil.ReadAll(buf)
+	data, err := io.ReadAll(buf)
 	if err != nil {
-		return errors.Wrap(err, "Could not read chronicle manifest")
+		return errkit.Wrap(err, "Could not read chronicle manifest")
 	}
 	return location.Read(ctx, target, p, string(data))
 }

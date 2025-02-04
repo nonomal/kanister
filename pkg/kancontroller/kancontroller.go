@@ -19,7 +19,7 @@ Some of the code below came from https://github.com/coreos/etcd-operator
 which also has the apache 2.0 license.
 */
 
-// Package for a kanister operator
+// Package kancontroller is for a kanister operator.
 package kancontroller
 
 import (
@@ -30,23 +30,46 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/rest"
 
 	"github.com/kanisterio/kanister/pkg/controller"
-	"github.com/kanisterio/kanister/pkg/field"
-	_ "github.com/kanisterio/kanister/pkg/function"
 	"github.com/kanisterio/kanister/pkg/handler"
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/log"
 	"github.com/kanisterio/kanister/pkg/resource"
+	"github.com/kanisterio/kanister/pkg/validatingwebhook"
+
+	_ "github.com/kanisterio/kanister/pkg/function"
 )
 
 const (
-	createOrUpdateCRDEnvVar = "CREATEORUPDATE_CRDS"
+	kanisterMetricsEnv = "KANISTER_METRICS_ENABLED"
 )
+
+// metricsEnabled checks if the feature flag for kanister metrics is enabled
+// If the environment variable is not set, then it returns a default
+// "false" value.
+func metricsEnabled() bool {
+	metricsEnabled, ok := os.LookupEnv(kanisterMetricsEnv)
+	if !ok {
+		log.Error().Print("KANISTER_METRICS_ENABLED env variable not set")
+		return false
+	}
+	enabled, err := strconv.ParseBool(metricsEnabled)
+	if err != nil {
+		log.Error().Print("Error parsing KANISTER_METRICS_ENABLED env variable to bool")
+		return false
+	}
+	return enabled
+}
 
 func Execute() {
 	ctx := context.Background()
+	logLevel, exists := os.LookupEnv(log.LevelEnvName)
+	if exists {
+		log.Print(fmt.Sprintf("Controller log level: %s", logLevel))
+	}
 	// Initialize the clients.
 	log.Print("Getting kubernetes context")
 	config, err := rest.InClusterConfig()
@@ -56,8 +79,8 @@ func Execute() {
 	}
 
 	// Run HTTPS webhook server if webhook certificates are mounted in the pod
-	//otherwise normal HTTP server for health and prom endpoints
-	if isCACertMounted() {
+	// otherwise normal HTTP server for health and prom endpoints
+	if validatingwebhook.IsCACertMounted() {
 		go func(config *rest.Config) {
 			err := handler.RunWebhookServer(config)
 			if err != nil {
@@ -80,7 +103,7 @@ func Execute() {
 	}
 
 	// CRDs should only be created/updated if the env var CREATEORUPDATE_CRDS is set to true
-	if createOrUpdateCRDs() {
+	if resource.CreateOrUpdateCRDs() {
 		if err := resource.CreateCustomResources(ctx, config); err != nil {
 			log.WithError(err).Print("Failed to create CustomResources.")
 			return
@@ -95,7 +118,16 @@ func Execute() {
 
 	// Create and start the watcher.
 	ctx, cancel := context.WithCancel(ctx)
-	c := controller.New(config)
+
+	var c *controller.Controller
+
+	// pass a new prometheus registry or nil depending on
+	// the kanister prometheus metrics feature flag
+	if metricsEnabled() {
+		c = controller.New(config, prometheus.DefaultRegisterer)
+	} else {
+		c = controller.New(config, nil)
+	}
 	err = c.StartWatch(ctx, ns)
 	if err != nil {
 		log.WithError(err).Print("Failed to start controller.")
@@ -111,27 +143,4 @@ func Execute() {
 	<-signalChan
 	log.Print("shutdown signal received, exiting...")
 	cancel()
-}
-
-func isCACertMounted() bool {
-	if _, err := os.Stat(fmt.Sprintf("%s/%s", handler.WHCertsDir, "tls.crt")); err != nil {
-		return false
-	}
-
-	return true
-}
-
-func createOrUpdateCRDs() bool {
-	createOrUpdateCRD := os.Getenv(createOrUpdateCRDEnvVar)
-	if createOrUpdateCRD == "" {
-		return true
-	}
-
-	c, err := strconv.ParseBool(createOrUpdateCRD)
-	if err != nil {
-		log.Print("environment variable", field.M{"CREATEORUPDATE_CRDS": createOrUpdateCRD})
-		return true
-	}
-
-	return c
 }

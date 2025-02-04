@@ -16,11 +16,16 @@ package testutil
 
 import (
 	"context"
+	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 const (
@@ -34,15 +39,16 @@ const (
 )
 
 var (
-	failFuncCh   chan error
-	waitFuncCh   chan struct{}
-	argFuncCh    chan map[string]interface{}
-	outputFuncCh chan map[string]interface{}
-	cancelFuncCh chan error
+	failFuncCh          chan error
+	waitFuncCh          chan struct{}
+	argFuncCh           chan map[string]interface{}
+	outputFuncCh        chan map[string]interface{}
+	cancelFuncStartedCh chan struct{}
+	cancelFuncCh        chan error
 )
 
 func failFunc(context.Context, param.TemplateParams, map[string]interface{}) (map[string]interface{}, error) {
-	err := errors.New("Kanister function failed")
+	err := errkit.New("Kanister function failed")
 	failFuncCh <- err
 	return nil, err
 }
@@ -63,6 +69,7 @@ func outputFunc(ctx context.Context, tp param.TemplateParams, args map[string]in
 }
 
 func cancelFunc(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	cancelFuncStartedCh <- struct{}{}
 	<-ctx.Done()
 	cancelFuncCh <- ctx.Err()
 	return nil, ctx.Err()
@@ -77,6 +84,7 @@ func init() {
 	waitFuncCh = make(chan struct{})
 	argFuncCh = make(chan map[string]interface{})
 	outputFuncCh = make(chan map[string]interface{})
+	cancelFuncStartedCh = make(chan struct{})
 	cancelFuncCh = make(chan error)
 	registerMockKanisterFunc(FailFuncName, failFunc)
 	registerMockKanisterFunc(WaitFuncName, waitFunc)
@@ -109,6 +117,13 @@ func (mf *mockKanisterFunc) Exec(ctx context.Context, tp param.TemplateParams, a
 func (mf *mockKanisterFunc) Name() string {
 	return mf.name
 }
+func (mf *mockKanisterFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    progress.StartedPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
+}
 
 func FailFuncError() error {
 	return <-failFuncCh
@@ -132,6 +147,18 @@ func (mf *mockKanisterFunc) RequiredArgs() []string {
 
 func (mf *mockKanisterFunc) Arguments() []string {
 	return []string{testBPArg}
+}
+
+func (mf *mockKanisterFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(mf.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(mf.RequiredArgs(), args)
+}
+
+func CancelFuncStarted() struct{} {
+	return <-cancelFuncStartedCh
 }
 
 func CancelFuncOut() error {

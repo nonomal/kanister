@@ -1,3 +1,17 @@
+// Copyright 2023 The Kanister Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package secrets
 
 import (
@@ -5,12 +19,13 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	v1 "k8s.io/api/core/v1"
+	"github.com/kanisterio/errkit"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/kanisterio/kanister/pkg/aws"
 	"github.com/kanisterio/kanister/pkg/field"
 	"github.com/kanisterio/kanister/pkg/log"
-	"github.com/pkg/errors"
+	secerrors "github.com/kanisterio/kanister/pkg/secrets/errors"
 )
 
 const (
@@ -38,9 +53,9 @@ const (
 //
 // Optional field:
 // - session_token
-func ValidateAWSCredentials(secret *v1.Secret) error {
+func ValidateAWSCredentials(secret *corev1.Secret) error {
 	if string(secret.Type) != AWSSecretType {
-		return errors.New("Secret is not AWS secret")
+		return errkit.Wrap(secerrors.ErrValidate, secerrors.IncompatibleSecretTypeErrorMsg, AWSSecretType, secret.Namespace, secret.Name)
 	}
 	count := 0
 	if _, ok := secret.Data[AWSAccessKeyID]; ok {
@@ -53,7 +68,7 @@ func ValidateAWSCredentials(secret *v1.Secret) error {
 		count++
 	}
 	if len(secret.Data) > count {
-		return errors.New("Secret has an unknown field")
+		return errkit.New("Secret has an unknown field")
 	}
 	return nil
 }
@@ -76,7 +91,7 @@ func ValidateAWSCredentials(secret *v1.Secret) error {
 // of the IAM role - The setting can be viewed using instructions here
 // https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use.html#id_roles_use_view-role-max-session.
 // The IAM role's max duration setting can be modified between 1h to 12h.
-func ExtractAWSCredentials(ctx context.Context, secret *v1.Secret, assumeRoleDuration time.Duration) (*credentials.Value, error) {
+func ExtractAWSCredentials(ctx context.Context, secret *corev1.Secret, assumeRoleDuration time.Duration) (*credentials.Value, error) {
 	if err := ValidateAWSCredentials(secret); err != nil {
 		return nil, err
 	}
@@ -92,7 +107,7 @@ func ExtractAWSCredentials(ctx context.Context, secret *v1.Secret, assumeRoleDur
 	}
 	val, err := creds.Get()
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get AWS credentials")
+		return nil, errkit.Wrap(err, "Failed to get AWS credentials")
 	}
 	exp, err := creds.ExpiresAt()
 	if err == nil {

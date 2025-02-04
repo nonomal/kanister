@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	"k8s.io/client-go/kubernetes"
 
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
@@ -40,7 +40,8 @@ type PostgresDB struct {
 	namespace string
 }
 
-// Last tested chart version "10.12.3". Also we are using postgres version 13.4
+// NewPostgresDB initialises an instance of Postgres DB
+// Last tested chart version "15.5.38". Also, we are using postgres version 16
 func NewPostgresDB(name string, subPath string) App {
 	return &PostgresDB{
 		name: name,
@@ -50,17 +51,21 @@ func NewPostgresDB(name string, subPath string) App {
 			RepoURL:  helm.BitnamiRepoURL,
 			Chart:    "postgresql",
 			Values: map[string]string{
-				"image.registry":                        "ghcr.io",
-				"image.repository":                      "kanisterio/postgresql",
-				"image.tag":                             "v9.99.9-dev",
-				"image.pullPolicy":                      "Always",
-				"postgresqlPassword":                    "test@54321",
-				"postgresqlExtendedConf.archiveCommand": "envdir /bitnami/postgresql/data/env wal-e wal-push %p",
-				"postgresqlExtendedConf.archiveMode":    "true",
-				"postgresqlExtendedConf.archiveTimeout": "60",
-				"postgresqlExtendedConf.walLevel":       "archive",
-				"volumePermissions.enabled":             "true",
-				"persistence.subPath":                   subPath,
+				"image.pullPolicy":      "Always",
+				"auth.postgresPassword": "test@54321",
+				"persistence.subPath":   subPath,
+				// The following values are customized to allow snapshot/restore operations.
+				"volumePermissions.enabled":                               "true",
+				"primary.networkPolicy.enabled":                           "false",
+				"primary.containerSecurityContext.seccompProfile.type":    "Unconfined",
+				"primary.containerSecurityContext.capabilities.add[0]":    "CHOWN",
+				"primary.containerSecurityContext.capabilities.add[1]":    "FOWNER",
+				"primary.containerSecurityContext.capabilities.add[2]":    "DAC_OVERRIDE",
+				"primary.containerSecurityContext.readOnlyRootFilesystem": "false",
+				// Update manually whenever a new version is release.
+				// TODO: Automate the update process for the image tag.
+				"image.repository": "postgres",
+				"image.tag":        "16-bullseye",
 			},
 		},
 	}
@@ -87,7 +92,7 @@ func (pdb *PostgresDB) Install(ctx context.Context, ns string) error {
 	// Create helm client
 	cli, err := helm.NewCliClient()
 	if err != nil {
-		return errors.Wrap(err, "failed to create helm client")
+		return errkit.Wrap(err, "failed to create helm client")
 	}
 
 	// Add helm repo and fetch charts
@@ -95,7 +100,8 @@ func (pdb *PostgresDB) Install(ctx context.Context, ns string) error {
 		return err
 	}
 	// Install helm chart
-	return cli.Install(ctx, fmt.Sprintf("%s/%s", pdb.chart.RepoName, pdb.chart.Chart), pdb.chart.Version, pdb.chart.Release, pdb.namespace, pdb.chart.Values)
+	_, err = cli.Install(ctx, fmt.Sprintf("%s/%s", pdb.chart.RepoName, pdb.chart.Chart), pdb.chart.Version, pdb.chart.Release, pdb.namespace, pdb.chart.Values, true, false)
+	return err
 }
 
 func (pdb *PostgresDB) IsReady(ctx context.Context) (bool, error) {
@@ -123,7 +129,7 @@ func (pdb PostgresDB) ConfigMaps() map[string]crv1alpha1.ObjectReference {
 
 func (pdb PostgresDB) Secrets() map[string]crv1alpha1.ObjectReference {
 	return map[string]crv1alpha1.ObjectReference{
-		"postgresql": crv1alpha1.ObjectReference{
+		"postgresql": {
 			Kind:      "secret",
 			Name:      pdb.getStatefulSetName(),
 			Namespace: pdb.namespace,
@@ -136,36 +142,36 @@ func (pdb *PostgresDB) Ping(ctx context.Context) error {
 	cmd := "pg_isready -U 'postgres' -h 127.0.0.1 -p 5432"
 	_, stderr, err := pdb.execCommand(ctx, []string{"sh", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to ping postgresql DB. %s", stderr)
+		return errkit.Wrap(err, "Failed to ping postgresql DB", "stderr", stderr)
 	}
 	log.Info().Print("Connected to database.", field.M{"app": pdb.name})
 	return nil
 }
 
 func (pdb PostgresDB) Insert(ctx context.Context) error {
-	cmd := fmt.Sprintf("PGPASSWORD=${POSTGRES_PASSWORD} psql -d test -c \"INSERT INTO COMPANY (NAME,AGE,CREATED_AT) VALUES ('foo', 32, now());\"")
+	cmd := "PGPASSWORD=${POSTGRES_PASSWORD} psql -U postgres -d test -c \"INSERT INTO COMPANY (NAME,AGE,CREATED_AT) VALUES ('foo', 32, now());\""
 	_, stderr, err := pdb.execCommand(ctx, []string{"sh", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to create db in postgresql. %s", stderr)
+		return errkit.Wrap(err, "Failed to create db in postgresql", "stderr", stderr)
 	}
 	log.Info().Print("Inserted a row in test db.", field.M{"app": pdb.name})
 	return nil
 }
 
 func (pdb PostgresDB) Count(ctx context.Context) (int, error) {
-	cmd := "PGPASSWORD=${POSTGRES_PASSWORD} psql -d test -c 'SELECT COUNT(*) FROM company;'"
+	cmd := "PGPASSWORD=${POSTGRES_PASSWORD} psql -U postgres -d test -c 'SELECT COUNT(*) FROM company;'"
 	stdout, stderr, err := pdb.execCommand(ctx, []string{"sh", "-c", cmd})
 	if err != nil {
-		return 0, errors.Wrapf(err, "Failed to count db entries in postgresql. %s ", stderr)
+		return 0, errkit.Wrap(err, "Failed to count db entries in postgresql", "stderr", stderr)
 	}
 
 	out := strings.Fields(stdout)
 	if len(out) < 4 {
-		return 0, fmt.Errorf("Unknown response for count query")
+		return 0, errkit.New("unknown response for count query")
 	}
 	count, err := strconv.Atoi(out[2])
 	if err != nil {
-		return 0, errors.Wrapf(err, "Failed to count db entries in postgresql. %s ", stderr)
+		return 0, errkit.Wrap(err, "Failed to count db entries in postgresql", "stderr", stderr)
 	}
 	log.Info().Print("Counting rows in test db.", field.M{"app": pdb.name, "count": count})
 	return count, nil
@@ -173,10 +179,10 @@ func (pdb PostgresDB) Count(ctx context.Context) (int, error) {
 
 func (pdb PostgresDB) Reset(ctx context.Context) error {
 	// Delete database if exists
-	cmd := "PGPASSWORD=${POSTGRES_PASSWORD} psql -c 'DROP DATABASE IF EXISTS test;'"
+	cmd := "PGPASSWORD=${POSTGRES_PASSWORD} psql -U postgres -c 'DROP DATABASE IF EXISTS test;'"
 	_, stderr, err := pdb.execCommand(ctx, []string{"sh", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to drop db from postgresql. %s ", stderr)
+		return errkit.Wrap(err, "Failed to drop db from postgresql", "stderr", stderr)
 	}
 
 	log.Info().Print("Database reset successful!", field.M{"app": pdb.name})
@@ -186,17 +192,17 @@ func (pdb PostgresDB) Reset(ctx context.Context) error {
 // Initialize is used to initialize the database or create schema
 func (pdb PostgresDB) Initialize(ctx context.Context) error {
 	// Create database
-	cmd := "PGPASSWORD=${POSTGRES_PASSWORD} psql -c 'CREATE DATABASE test;'"
+	cmd := "PGPASSWORD=${POSTGRES_PASSWORD} psql -U postgres -c 'CREATE DATABASE test;'"
 	_, stderr, err := pdb.execCommand(ctx, []string{"sh", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to create db in postgresql. %s ", stderr)
+		return errkit.Wrap(err, "Failed to create db in postgresql", "stderr", stderr)
 	}
 
 	// Create table
-	cmd = "PGPASSWORD=${POSTGRES_PASSWORD} psql -d test -c 'CREATE TABLE COMPANY(ID SERIAL PRIMARY KEY NOT NULL, NAME TEXT NOT NULL, AGE INT NOT NULL, CREATED_AT TIMESTAMP);'"
+	cmd = "PGPASSWORD=${POSTGRES_PASSWORD} psql -U postgres -d test -c 'CREATE TABLE COMPANY(ID SERIAL PRIMARY KEY NOT NULL, NAME TEXT NOT NULL, AGE INT NOT NULL, CREATED_AT TIMESTAMP);'"
 	_, stderr, err = pdb.execCommand(ctx, []string{"sh", "-c", cmd})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to create table in postgresql. %s ", stderr)
+		return errkit.Wrap(err, "Failed to create table in postgresql", "stderr", stderr)
 	}
 	return nil
 }
@@ -207,11 +213,11 @@ func (pdb PostgresDB) Uninstall(ctx context.Context) error {
 	// Create helm client
 	cli, err := helm.NewCliClient()
 	if err != nil {
-		return errors.Wrap(err, "failed to create helm client")
+		return errkit.Wrap(err, "failed to create helm client")
 	}
 
 	// Uninstall helm chart
-	return errors.Wrapf(cli.Uninstall(ctx, pdb.chart.Release, pdb.namespace), "Failed to uninstall %s helm release", pdb.chart.Release)
+	return errkit.Wrap(cli.Uninstall(ctx, pdb.chart.Release, pdb.namespace), "Failed to uninstall helm release", "release", pdb.chart.Release)
 }
 
 func (pdp *PostgresDB) GetClusterScopedResources(ctx context.Context) []crv1alpha1.ObjectReference {
@@ -224,5 +230,5 @@ func (pdb PostgresDB) execCommand(ctx context.Context, command []string) (string
 	if err != nil {
 		return "", "", err
 	}
-	return kube.Exec(pdb.cli, pdb.namespace, pod, container, command, nil)
+	return kube.Exec(ctx, pdb.cli, pdb.namespace, pod, container, command, nil)
 }

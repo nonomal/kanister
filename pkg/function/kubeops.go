@@ -19,8 +19,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 
@@ -28,6 +29,8 @@ import (
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -51,13 +54,19 @@ const (
 	KubeOpsOperationArg = "operation"
 )
 
-type kubeops struct{}
+type kubeops struct {
+	progressPercent string
+}
 
 func (*kubeops) Name() string {
 	return KubeOpsFuncName
 }
 
-func (crs *kubeops) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (k *kubeops) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	k.progressPercent = progress.StartedPercent
+	defer func() { k.progressPercent = progress.CompletedPercent }()
+
 	var spec, namespace string
 	var op kube.Operation
 	var objRefArg crv1alpha1.ObjectReference
@@ -83,13 +92,13 @@ func (crs *kubeops) Exec(ctx context.Context, tp param.TemplateParams, args map[
 	if err != nil {
 		return nil, err
 	}
-	objRefJson, err := json.Marshal(objRef)
+	objRefJSON, err := json.Marshal(objRef)
 	if err != nil {
 		return nil, err
 	}
 	// Convert objRef to map[string]interface{}
 	var out map[string]interface{}
-	if err := json.Unmarshal(objRefJson, &out); err != nil {
+	if err := json.Unmarshal(objRefJSON, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -100,18 +109,18 @@ func execKubeOperation(ctx context.Context, dynCli dynamic.Interface, op kube.Op
 	switch op {
 	case kube.CreateOperation:
 		if len(spec) == 0 {
-			return nil, errors.New(fmt.Sprintf("spec cannot be empty for %s operation", kube.CreateOperation))
+			return nil, errkit.New(fmt.Sprintf("spec cannot be empty for %s operation", kube.CreateOperation))
 		}
 		return kubeopsOp.Create(strings.NewReader(spec), namespace)
 	case kube.DeleteOperation:
 		if objRef.Name == "" ||
 			objRef.APIVersion == "" ||
 			objRef.Resource == "" {
-			return nil, errors.New(fmt.Sprintf("missing one or more required fields name/namespace/group/apiVersion/resource in objectReference for %s operation", kube.DeleteOperation))
+			return nil, errkit.New(fmt.Sprintf("missing one or more required fields name/namespace/group/apiVersion/resource in objectReference for %s operation", kube.DeleteOperation))
 		}
 		return kubeopsOp.Delete(ctx, objRef, namespace)
 	}
-	return nil, errors.New(fmt.Sprintf("invalid operation '%s'", op))
+	return nil, errkit.New(fmt.Sprintf("invalid operation '%s'", op))
 }
 
 func (*kubeops) RequiredArgs() []string {
@@ -127,4 +136,20 @@ func (*kubeops) Arguments() []string {
 		KubeOpsNamespaceArg,
 		KubeOpsObjectReferenceArg,
 	}
+}
+
+func (k *kubeops) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(k.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(k.RequiredArgs(), args)
+}
+
+func (k *kubeops) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    k.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
 }

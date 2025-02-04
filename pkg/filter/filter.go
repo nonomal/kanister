@@ -15,7 +15,7 @@
 package filter
 
 import (
-	"k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -28,9 +28,24 @@ type ResourceTypeRequirement struct {
 	Resource string `json:"resource,omitempty"`
 }
 
+// K8sCoreGroupExactMatch is sentinel value that only matches K8s core group of ""
+const K8sCoreGroupExactMatch = "core"
+
 // Matches returns true if group, version and resource values match or are empty
+// Group value of K8sCoreGroupExactMatch only matches K8s core group of ""
 func (r ResourceTypeRequirement) Matches(gvr schema.GroupVersionResource) bool {
-	return matches(r.Group, gvr.Group) && matches(r.Version, gvr.Version) && matches(r.Resource, gvr.Resource)
+	var groupMatch bool
+	if r.Group == K8sCoreGroupExactMatch {
+		groupMatch = gvr.Group == ""
+	} else {
+		groupMatch = matches(r.Group, gvr.Group)
+	}
+	return groupMatch && matches(r.Version, gvr.Version) && matches(r.Resource, gvr.Resource)
+}
+
+// Empty returns true if ResourceTypeRequirement has no fields set
+func (rtr ResourceTypeRequirement) Empty() bool {
+	return rtr.Group == "" && rtr.Version == "" && rtr.Resource == ""
 }
 
 func matches(sel, val string) bool {
@@ -120,7 +135,7 @@ func JoinResourceTypeMatchers(ms ...ResourceTypeMatcher) ResourceTypeMatcher {
 // ResourceRequirement allows specifying a resource requirement by type and/or name
 type ResourceRequirement struct {
 	// Provides the Name of the resource object
-	v1.LocalObjectReference `json:",inline,omitempty"`
+	corev1.LocalObjectReference `json:",inline,omitempty"`
 	// Provides the Group, Version, and Resource values (GVR)
 	ResourceTypeRequirement `json:",inline,omitempty"`
 	// Specifies a set of label requirements to be used as filters for matches
@@ -130,7 +145,7 @@ type ResourceRequirement struct {
 // DeepCopyInto provides explicit deep copy implementation to avoid
 func (r ResourceRequirement) DeepCopyInto(out *ResourceRequirement) {
 	r.LocalObjectReference.DeepCopyInto(&out.LocalObjectReference)
-	(*out).ResourceTypeRequirement = r.ResourceTypeRequirement
+	out.ResourceTypeRequirement = r.ResourceTypeRequirement
 	r.LabelSelector.DeepCopyInto(&out.LabelSelector)
 }
 

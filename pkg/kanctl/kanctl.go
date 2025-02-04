@@ -17,7 +17,8 @@ package kanctl
 import (
 	"os"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	osversioned "github.com/openshift/client-go/apps/clientset/versioned"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
 
@@ -25,8 +26,6 @@ import (
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/log"
 	"github.com/kanisterio/kanister/pkg/version"
-
-	osversioned "github.com/openshift/client-go/apps/clientset/versioned"
 )
 
 const (
@@ -80,17 +79,17 @@ func initializeClients() (kubernetes.Interface, versioned.Interface, osversioned
 	}
 	cli, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "could not get the kubernetes client")
+		return nil, nil, nil, errkit.Wrap(err, "could not get the kubernetes client")
 	}
 
 	osCli, err := osversioned.NewForConfig(config)
 	if err != nil {
-		return nil, nil, nil, errors.Wrapf(err, "could not get openshift client")
+		return nil, nil, nil, errkit.Wrap(err, "could not get openshift client")
 	}
 
 	crCli, err := versioned.NewForConfig(config)
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "could not get the CRD client")
+		return nil, nil, nil, errkit.Wrap(err, "could not get the CRD client")
 	}
 	return cli, crCli, osCli, nil
 }

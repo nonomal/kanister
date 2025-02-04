@@ -22,8 +22,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/Masterminds/sprig"
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -31,11 +30,15 @@ import (
 
 	kanister "github.com/kanisterio/kanister/pkg"
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
+	"github.com/kanisterio/kanister/pkg/field"
 	"github.com/kanisterio/kanister/pkg/jsonpath"
+	"github.com/kanisterio/kanister/pkg/ksprig"
 	"github.com/kanisterio/kanister/pkg/kube"
 	"github.com/kanisterio/kanister/pkg/log"
 	"github.com/kanisterio/kanister/pkg/param"
 	"github.com/kanisterio/kanister/pkg/poll"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 type WaitConditions struct {
@@ -61,31 +64,45 @@ func init() {
 
 var _ kanister.Func = (*waitFunc)(nil)
 
-type waitFunc struct{}
+type waitFunc struct {
+	progressPercent string
+}
 
 func (*waitFunc) Name() string {
 	return WaitFuncName
 }
 
-func (ktf *waitFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (w *waitFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	w.progressPercent = progress.StartedPercent
+	defer func() { w.progressPercent = progress.CompletedPercent }()
+
+	rendered, err := param.RenderArgs(args, tp)
+	if err != nil {
+		return nil, err
+	}
+
 	var timeout string
+	if err := Arg(rendered, WaitTimeoutArg, &timeout); err != nil {
+		return nil, err
+	}
+
+	// get the 'conditions' from the unrendered arguments list.
+	// they will be evaluated in the 'evaluateCondition()` function.
 	var conditions WaitConditions
-	var err error
-	if err = Arg(args, WaitTimeoutArg, &timeout); err != nil {
+	if err := Arg(args, WaitConditionsArg, &conditions); err != nil {
 		return nil, err
 	}
-	if err = Arg(args, WaitConditionsArg, &conditions); err != nil {
-		return nil, err
-	}
+
 	dynCli, err := kube.NewDynamicClient()
 	if err != nil {
 		return nil, err
 	}
 	timeoutDur, err := time.ParseDuration(timeout)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to parse timeout")
+		return nil, errkit.Wrap(err, "Failed to parse timeout")
 	}
-	err = waitForCondition(ctx, dynCli, conditions, timeoutDur)
+	err = waitForCondition(ctx, dynCli, conditions, timeoutDur, tp, evaluateWaitCondition)
 	return nil, err
 }
 
@@ -103,18 +120,41 @@ func (*waitFunc) Arguments() []string {
 	}
 }
 
+func (w *waitFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(w.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(w.RequiredArgs(), args)
+}
+
+func (w *waitFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    w.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
+}
+
 // waitForCondition wait till the condition satisfies within the timeout duration
-func waitForCondition(ctx context.Context, dynCli dynamic.Interface, waitCond WaitConditions, timeout time.Duration) error {
+func waitForCondition(
+	ctx context.Context,
+	dynCli dynamic.Interface,
+	waitCond WaitConditions,
+	timeout time.Duration,
+	tp param.TemplateParams,
+	eval func(context.Context, dynamic.Interface, Condition, param.TemplateParams) (bool, error),
+) error {
 	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var evalErr error
 	result := false
 	err := poll.Wait(ctxTimeout, func(ctx context.Context) (bool, error) {
 		for _, cond := range waitCond.AnyOf {
-			result, evalErr = evaluateCondition(ctx, dynCli, cond)
+			result, evalErr = eval(ctx, dynCli, cond, tp)
 			if evalErr != nil {
-				// TODO: Fail early if the error is due to jsonpath syntax
-				log.Debug().WithError(evalErr).Print("Failed to evaluate the condition")
+				// TODO: Fail early if the error is due to invalid syntax
+				log.Debug().WithError(evalErr).Print("Failed to evaluate the condition", field.M{"result": result})
 				return false, nil
 			}
 			if result {
@@ -122,28 +162,34 @@ func waitForCondition(ctx context.Context, dynCli dynamic.Interface, waitCond Wa
 			}
 		}
 		for _, cond := range waitCond.AllOf {
-			result, evalErr = evaluateCondition(ctx, dynCli, cond)
+			result, evalErr = eval(ctx, dynCli, cond, tp)
 			if evalErr != nil {
-				// TODO: Fail early if the error is due to jsonpath syntax
-				log.Debug().WithError(evalErr).Print("Failed to evaluate the condition")
+				// TODO: Fail early if the error is due to invalid syntax
+				log.Debug().WithError(evalErr).Print("Failed to evaluate the condition", field.M{"result": result})
 				return false, nil
 			}
+			// Retry if any condition fails
 			if !result {
 				return false, nil
 			}
 		}
-		return false, nil
+		return result, nil
 	})
-	err = errors.Wrap(err, "Failed to wait for the condition to be met")
+	err = errkit.Wrap(err, "Failed to wait for the condition to be met")
 	if evalErr != nil {
-		return errors.Wrap(err, evalErr.Error())
+		return errkit.Wrap(err, evalErr.Error())
 	}
 	return err
 }
 
-// evaluateCondition evaluate the go template condition
-func evaluateCondition(ctx context.Context, dynCli dynamic.Interface, cond Condition) (bool, error) {
-	obj, err := fetchObjectFromRef(ctx, dynCli, cond.ObjectReference)
+// evaluateWaitCondition evaluate the go template condition
+func evaluateWaitCondition(ctx context.Context, dynCli dynamic.Interface, cond Condition, tp param.TemplateParams) (bool, error) {
+	objRef, err := resolveWaitConditionObjRefs(cond, tp)
+	if err != nil {
+		return false, err
+	}
+
+	obj, err := fetchObjectFromRef(ctx, dynCli, objRef)
 	if err != nil {
 		return false, err
 	}
@@ -152,15 +198,27 @@ func evaluateCondition(ctx context.Context, dynCli dynamic.Interface, cond Condi
 		return false, err
 	}
 	log.Debug().Print(fmt.Sprintf("Resolved jsonpath: %s", rcondition))
-	t, err := template.New("config").Option("missingkey=zero").Funcs(sprig.TxtFuncMap()).Parse(rcondition)
+	t, err := template.New("config").Option("missingkey=zero").Funcs(ksprig.TxtFuncMap()).Parse(rcondition)
 	if err != nil {
-		return false, errors.WithStack(err)
+		return false, errkit.WithStack(err)
 	}
 	buf := bytes.NewBuffer(nil)
 	if err = t.Execute(buf, nil); err != nil {
-		return false, errors.WithStack(err)
+		return false, errkit.WithStack(err)
 	}
+	log.Debug().Print(fmt.Sprintf("Condition evaluation result: %s", strings.TrimSpace(buf.String())))
 	return strings.TrimSpace(buf.String()) == "true", nil
+}
+
+func resolveWaitConditionObjRefs(cond Condition, tp param.TemplateParams) (crv1alpha1.ObjectReference, error) {
+	objRefRaw := map[string]crv1alpha1.ObjectReference{
+		"objRef": cond.ObjectReference,
+	}
+	rendered, err := param.RenderObjectRefs(objRefRaw, tp)
+	if err != nil {
+		return crv1alpha1.ObjectReference{}, err
+	}
+	return rendered["objRef"], nil
 }
 
 func fetchObjectFromRef(ctx context.Context, dynCli dynamic.Interface, objRef crv1alpha1.ObjectReference) (runtime.Object, error) {

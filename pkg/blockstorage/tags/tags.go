@@ -27,7 +27,7 @@ import (
 const (
 	// ClusterTagKey is used to tag resources with the cluster name
 	ClusterTagKey = "kanister.io/clustername"
-	// VersionTagKey is used to tag resources with the K10 version
+	// VersionTagKey is used to tag resources with a version
 	VersionTagKey = "kanister.io/version"
 	// AppNameTag is used to tag volumes with the app they belong to
 	AppNameTag = "kanister.io/appname"
@@ -101,17 +101,4 @@ func IsSubset(set map[string]string, subset map[string]string) bool {
 		}
 	}
 	return true
-}
-
-// Union returns union of A and B as a new map.
-// B's values have priority if a key from A and B collides.
-func Union(A map[string]string, B map[string]string) map[string]string {
-	result := make(map[string]string)
-	for k, v := range A {
-		result[k] = v
-	}
-	for k, v := range B {
-		result[k] = v
-	}
-	return result
 }

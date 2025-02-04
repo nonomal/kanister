@@ -17,12 +17,17 @@ package function
 import (
 	"context"
 	"strings"
+	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/location"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 const (
@@ -38,20 +43,26 @@ func init() {
 
 var _ kanister.Func = (*locationDeleteFunc)(nil)
 
-type locationDeleteFunc struct{}
+type locationDeleteFunc struct {
+	progressPercent string
+}
 
 func (*locationDeleteFunc) Name() string {
 	return LocationDeleteFuncName
 }
 
-func (*locationDeleteFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func (l *locationDeleteFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	l.progressPercent = progress.StartedPercent
+	defer func() { l.progressPercent = progress.CompletedPercent }()
+
 	var artifact string
 	var err error
 	if err = Arg(args, LocationDeleteArtifactArg, &artifact); err != nil {
 		return nil, err
 	}
 	if err = ValidateProfile(tp.Profile); err != nil {
-		return nil, errors.Wrapf(err, "Failed to validate Profile")
+		return nil, errkit.Wrap(err, "Failed to validate Profile")
 	}
 	return nil, location.Delete(ctx, *tp.Profile, strings.TrimPrefix(artifact, tp.Profile.Location.Bucket))
 }
@@ -62,4 +73,20 @@ func (*locationDeleteFunc) RequiredArgs() []string {
 
 func (*locationDeleteFunc) Arguments() []string {
 	return []string{LocationDeleteArtifactArg}
+}
+
+func (l *locationDeleteFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(l.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(l.RequiredArgs(), args)
+}
+
+func (l *locationDeleteFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    l.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
 }

@@ -19,22 +19,24 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/go-logr/logr"
+	"github.com/kanisterio/errkit"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kanisterio/kanister/pkg/validatingwebhook"
 	"github.com/kanisterio/kanister/pkg/version"
-	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
 	healthCheckPath = "/v0/healthz"
 	metricsPath     = "/metrics"
 	healthCheckAddr = ":8000"
-	WHCertsDir      = "/var/run/webhook/serving-cert"
 	whHandlePath    = "/validate/v1alpha1/blueprint"
 )
 
@@ -49,7 +51,7 @@ var _ http.Handler = (*healthCheckHandler)(nil)
 type healthCheckHandler struct{}
 
 func (*healthCheckHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	version := version.VERSION
+	version := version.Version
 	info := Info{true, version}
 	js, err := json.Marshal(info)
 	if err != nil {
@@ -58,22 +60,31 @@ func (*healthCheckHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = io.WriteString(w, string(js))
+	_, _ = io.Writer.Write(w, js)
 }
 
 // RunWebhookServer starts the validating webhook resources for blueprint kanister resources
 func RunWebhookServer(c *rest.Config) error {
+	log.SetLogger(logr.New(log.NullLogSink{}))
 	mgr, err := manager.New(c, manager.Options{})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to create new webhook manager")
+		return errkit.Wrap(err, "Failed to create new webhook manager")
+	}
+	bpValidator := &validatingwebhook.BlueprintValidator{}
+	decoder := admission.NewDecoder(mgr.GetScheme())
+	if err = bpValidator.InjectDecoder(&decoder); err != nil {
+		return errkit.Wrap(err, "Failed to inject decoder")
 	}
 
-	hookServer := mgr.GetWebhookServer()
-	hookServer.Register(whHandlePath, &webhook.Admission{Handler: &validatingwebhook.BlueprintValidator{}})
+	hookServerOptions := webhook.Options{CertDir: validatingwebhook.WHCertsDir}
+	hookServer := webhook.NewServer(hookServerOptions)
+	hookServer.Register(whHandlePath, &webhook.Admission{Handler: bpValidator})
 	hookServer.Register(healthCheckPath, &healthCheckHandler{})
 	hookServer.Register(metricsPath, promhttp.Handler())
 
-	hookServer.CertDir = WHCertsDir
+	if err := mgr.Add(hookServer); err != nil {
+		return errkit.Wrap(err, "Failed to add new webhook server")
+	}
 
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		return err

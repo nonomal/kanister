@@ -17,13 +17,16 @@ package main
 
 import (
 	"github.com/kanisterio/kanister/pkg/kanctl"
+	"github.com/kanisterio/kanister/pkg/log"
 )
 
 func init() {
 	// We silence all non-fatal log messages.
-	//logrus.SetLevel(logrus.ErrorLevel)
+	// logrus.SetLevel(logrus.ErrorLevel)
 }
 
 func main() {
+	log.SetupClusterNameInLogVars()
+
 	kanctl.Execute()
 }

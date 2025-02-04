@@ -19,15 +19,17 @@ import (
 	"fmt"
 	"strings"
 
+	"gopkg.in/check.v1"
+
 	"github.com/kanisterio/kanister/pkg/param"
-	. "gopkg.in/check.v1"
+	"github.com/kanisterio/kanister/pkg/postgres"
 )
 
 type RDSFunctionsTest struct{}
 
-var _ = Suite(&RDSFunctionsTest{})
+var _ = check.Suite(&RDSFunctionsTest{})
 
-func (s *RDSFunctionsTest) TestPrepareCommand(c *C) {
+func (s *RDSFunctionsTest) TestPrepareCommand(c *check.C) {
 	testCases := []struct {
 		name            string
 		dbEngine        RDSDBEngine
@@ -39,7 +41,7 @@ func (s *RDSFunctionsTest) TestPrepareCommand(c *C) {
 		backupPrefix    string
 		backupID        string
 		dbEngineVersion string
-		errChecker      Checker
+		errChecker      check.Checker
 		tp              param.TemplateParams
 		command         []string
 	}{
@@ -53,13 +55,35 @@ func (s *RDSFunctionsTest) TestPrepareCommand(c *C) {
 			backupPrefix:    "/backup/postgres-backup",
 			backupID:        "backup-id",
 			dbEngineVersion: "12.7",
-			errChecker:      IsNil,
+			errChecker:      check.IsNil,
 			dbList:          []string{"template1"},
 			command: []string{"bash", "-o", "errexit", "-o", "pipefail", "-c",
 				fmt.Sprintf(`
 		export PGHOST=%s
-		kando location pull --profile '%s' --path "%s" - | gunzip -c -f | sed 's/LOCALE/LC_COLLATE/' | psql -q -U "${PGUSER}" %s
-		`, "db-endpoint", "null", fmt.Sprintf("%s/%s", "/backup/postgres-backup", "backup-id"), []string{"template1"}[0]),
+		kando location pull --profile "%s" --path "%s" - | gunzip -c -f | sed 's/"LOCALE"/"LC_COLLATE"/' | psql -q -U "${PGUSER}" %s
+		`, "db-endpoint", "null", fmt.Sprintf("%s/%s", "/backup/postgres-backup", "backup-id"), postgres.DefaultConnectDatabase),
+			},
+		},
+		{
+			name:            "PostgreS restore command with profile",
+			dbEngine:        PostgrSQLEngine,
+			action:          RestoreAction,
+			dbEndpoint:      "db-endpoint",
+			username:        "test-user",
+			password:        "secret-pass",
+			backupPrefix:    "/backup/postgres-backup",
+			backupID:        "backup-id",
+			dbEngineVersion: "12.7",
+			errChecker:      check.IsNil,
+			dbList:          []string{"template1"},
+			command: []string{"bash", "-o", "errexit", "-o", "pipefail", "-c",
+				fmt.Sprintf(`
+		export PGHOST=%s
+		kando location pull --profile "{\"Location\":{\"type\":\"\",\"bucket\":\"\",\"endpoint\":\"\",\"prefix\":\"\",\"region\":\"\"},\"Credential\":{\"Type\":\"\",\"KeyPair\":null,\"Secret\":null,\"KopiaServerSecret\":null},\"SkipSSLVerify\":false}" --path "%s" - | gunzip -c -f | sed 's/"LOCALE"/"LC_COLLATE"/' | psql -q -U "${PGUSER}" %s
+		`, "db-endpoint", fmt.Sprintf("%s/%s", "/backup/postgres-backup", "backup-id"), postgres.DefaultConnectDatabase),
+			},
+			tp: param.TemplateParams{
+				Profile: &param.Profile{},
 			},
 		},
 		{
@@ -72,13 +96,13 @@ func (s *RDSFunctionsTest) TestPrepareCommand(c *C) {
 			backupPrefix:    "/backup/postgres-backup",
 			backupID:        "backup-id",
 			dbEngineVersion: "13.3",
-			errChecker:      IsNil,
+			errChecker:      check.IsNil,
 			dbList:          []string{"template1"},
 			command: []string{"bash", "-o", "errexit", "-o", "pipefail", "-c",
 				fmt.Sprintf(`
 		export PGHOST=%s
-		kando location pull --profile '%s' --path "%s" - | gunzip -c -f | psql -q -U "${PGUSER}" %s
-		`, "db-endpoint", "null", fmt.Sprintf("%s/%s", "/backup/postgres-backup", "backup-id"), []string{"template1"}[0]),
+		kando location pull --profile "%s" --path "%s" - | gunzip -c -f | psql -q -U "${PGUSER}" %s
+		`, "db-endpoint", "null", fmt.Sprintf("%s/%s", "/backup/postgres-backup", "backup-id"), postgres.DefaultConnectDatabase),
 			},
 		},
 		{
@@ -91,7 +115,7 @@ func (s *RDSFunctionsTest) TestPrepareCommand(c *C) {
 			backupPrefix:    "/backup/postgres-backup",
 			backupID:        "backup-id",
 			dbEngineVersion: "12.7",
-			errChecker:      IsNil,
+			errChecker:      check.IsNil,
 			dbList:          []string{"template1"},
 			command: []string{"bash", "-o", "errexit", "-o", "pipefail", "-c",
 				fmt.Sprintf(`
@@ -104,7 +128,7 @@ func (s *RDSFunctionsTest) TestPrepareCommand(c *C) {
 			for db in "${dblist[@]}";
 			  do echo "backing up $db db" && pg_dump $db -C --inserts > /backup/$db.sql;
 			done
-			tar -zc backup | kando location push --profile '%s' --path "${BACKUP_PREFIX}/${BACKUP_ID}" -
+			tar -zc backup | kando location push --profile "%s" --path "${BACKUP_PREFIX}/${BACKUP_ID}" -
 			kando output %s ${BACKUP_ID}`,
 					"db-endpoint", "/backup/postgres-backup", "backup-id", strings.Join([]string{"template1"}, " "), "null", ExportRDSSnapshotToLocBackupID),
 			},
@@ -119,16 +143,16 @@ func (s *RDSFunctionsTest) TestPrepareCommand(c *C) {
 			backupPrefix:    "/backup/postgres-backup",
 			backupID:        "backup-id",
 			dbEngineVersion: "12.7",
-			errChecker:      NotNil,
+			errChecker:      check.NotNil,
 			dbList:          []string{"template1"},
 			command:         nil,
 		},
 	}
 
 	for _, tc := range testCases {
-		outCommand, _, err := prepareCommand(context.Background(), tc.dbEngine, tc.action, tc.dbEndpoint, tc.username, tc.password, tc.dbList, tc.backupPrefix, tc.backupID, tc.tp.Profile, tc.dbEngineVersion)
+		outCommand, err := prepareCommand(context.Background(), tc.dbEngine, tc.action, tc.dbEndpoint, tc.username, tc.password, tc.dbList, tc.backupPrefix, tc.backupID, tc.tp.Profile, tc.dbEngineVersion)
 
-		c.Check(err, tc.errChecker, Commentf("Case %s failed", tc.name))
-		c.Assert(outCommand, DeepEquals, tc.command)
+		c.Check(err, tc.errChecker, check.Commentf("Case %s failed", tc.name))
+		c.Assert(outCommand, check.DeepEquals, tc.command)
 	}
 }

@@ -17,7 +17,7 @@ package eventer
 import (
 	"context"
 
-	core "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -26,17 +26,17 @@ import (
 	"github.com/kanisterio/kanister/pkg/log"
 )
 
-//NewEventRecorder returns an EventRecorder to records events for the associated runtime object
+// NewEventRecorder returns an EventRecorder to records events for the associated runtime object
 func NewEventRecorder(client kubernetes.Interface, component string) record.EventRecorder {
 	// Event Broadcaster
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartEventWatcher(
-		func(event *core.Event) {
+		func(event *corev1.Event) {
 			if _, err := client.CoreV1().Events(event.Namespace).Create(context.TODO(), event, metav1.CreateOptions{}); err != nil {
 				log.Error().WithError(err).Print("Error while creating the event")
 			}
 		},
 	)
 
-	return broadcaster.NewRecorder(scheme.Scheme, core.EventSource{Component: component})
+	return broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: component})
 }

@@ -15,38 +15,55 @@
 package testutil
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
+	"time"
 
 	"golang.org/x/oauth2/google"
-	compute "google.golang.org/api/compute/v1"
+	"google.golang.org/api/compute/v1"
+	"gopkg.in/check.v1"
 	appsv1 "k8s.io/api/apps/v1"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	awsconfig "github.com/kanisterio/kanister/pkg/aws"
 	"github.com/kanisterio/kanister/pkg/blockstorage"
 	"github.com/kanisterio/kanister/pkg/consts"
+	"github.com/kanisterio/kanister/pkg/kopia/command"
+	"github.com/kanisterio/kanister/pkg/kopia/repository"
+	"github.com/kanisterio/kanister/pkg/secrets"
+	reposerver "github.com/kanisterio/kanister/pkg/secrets/repositoryserver"
 )
 
 const (
-	testBPArg = "key"
+	testBPArg                      = "key"
+	s3CompliantAccessKeyIDEnv      = "S3_COMPLIANT_AWS_ACCESS_KEY_ID"
+	s3CompliantSecretAccessKeyEnv  = "S3_COMPLIANT_AWS_SECRET_ACCESS_KEY"
+	s3CompliantLocationEndpointEnv = "S3_COMPLIANT_LOCATION_ENDPOINT"
 )
 
 // NewTestPVC function returns a pointer to a new PVC test object
-func NewTestPVC() *v1.PersistentVolumeClaim {
-	return &v1.PersistentVolumeClaim{
+func NewTestPVC() *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "kanistercontrollertest",
 		},
-		Spec: v1.PersistentVolumeClaimSpec{
-			AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
-			Resources: v1.ResourceRequirements{
-				Requests: v1.ResourceList{
-					v1.ResourceName(v1.ResourceStorage): resource.MustParse("1Gi"),
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceName(corev1.ResourceStorage): resource.MustParse("1Gi"),
 				},
 			},
 		},
@@ -54,8 +71,8 @@ func NewTestPVC() *v1.PersistentVolumeClaim {
 }
 
 // NewTestNamespace function returns a pointer to a new Namespace test object
-func NewTestNamespace() *v1.Namespace {
-	return &v1.Namespace{
+func NewTestNamespace() *corev1.Namespace {
+	return &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "kanistercontrollertest-",
 		},
@@ -91,20 +108,21 @@ func NewTestStatefulSet(replicas int32) *appsv1.StatefulSet {
 	}
 }
 
-func newTestPodTemplateSpec() v1.PodTemplateSpec {
-	return v1.PodTemplateSpec{
+func newTestPodTemplateSpec() corev1.PodTemplateSpec {
+	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: map[string]string{
 				"app": "fake-app",
 			},
 		},
-		Spec: v1.PodSpec{
-			Containers: []v1.Container{
-				v1.Container{
-					Name:    "test-container",
-					Image:   "ghcr.io/kanisterio/kanister-tools:v9.99.9-dev",
-					Command: []string{"tail"},
-					Args:    []string{"-f", "/dev/null"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:            "test-container",
+					Image:           consts.LatestKanisterToolsImage,
+					Command:         []string{"tail"},
+					Args:            []string{"-f", "/dev/null"},
+					ImagePullPolicy: corev1.PullAlways,
 				},
 			},
 		},
@@ -114,8 +132,8 @@ func newTestPodTemplateSpec() v1.PodTemplateSpec {
 const TestProfileName = "test-profile"
 
 // NewTestProfileSecret function returns a pointer to a new Secret test object.
-func NewTestProfileSecret() *v1.Secret {
-	return &v1.Secret{
+func NewTestProfileSecret() *corev1.Secret {
+	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "test-secret-",
 		},
@@ -127,8 +145,8 @@ func NewTestProfileSecret() *v1.Secret {
 }
 
 // NewTestProfileSecretWithRole function returns a pointer to a new Secret test object with role.
-func NewTestProfileSecretWithRole(role string) *v1.Secret {
-	return &v1.Secret{
+func NewTestProfileSecretWithRole(role string) *corev1.Secret {
+	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "test-secret-",
 		},
@@ -167,7 +185,7 @@ func NewTestProfile(namespace string, secretName string) *crv1alpha1.Profile {
 
 // NewSecretProfileFromLocation figures out Provider type from the location type and
 // returns a pointer to Secret and Profile
-func NewSecretProfileFromLocation(location crv1alpha1.Location) (*v1.Secret, *crv1alpha1.Profile, error) {
+func NewSecretProfileFromLocation(location crv1alpha1.Location) (*corev1.Secret, *crv1alpha1.Profile, error) {
 	var key, val string
 	data := make(map[string]string)
 
@@ -198,8 +216,8 @@ func NewSecretProfileFromLocation(location crv1alpha1.Location) (*v1.Secret, *cr
 }
 
 // NewProfileSecret function returns a pointer to a new Secret test object.
-func NewProfileSecret(data map[string]string) *v1.Secret {
-	return &v1.Secret{
+func NewProfileSecret(data map[string]string) *corev1.Secret {
+	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "test-secret-",
 		},
@@ -225,8 +243,37 @@ func NewProfile(location crv1alpha1.Location) *crv1alpha1.Profile {
 	}
 }
 
+// NewTestRestoreActionSet returns a pointer to a restore actionset, that is used in deferPhase blueprint
+func NewTestRestoreActionSet(namespace, blueprintName, poName string, arts map[string]crv1alpha1.Artifact) *crv1alpha1.ActionSet {
+	return &crv1alpha1.ActionSet{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "test-restore-actionset-",
+			Namespace:    namespace,
+		},
+		Spec: &crv1alpha1.ActionSetSpec{
+			Actions: []crv1alpha1.ActionSpec{
+				{
+					Artifacts: arts,
+					Blueprint: blueprintName,
+					Name:      "restore",
+					Object: crv1alpha1.ObjectReference{
+						Kind:      "Deployment",
+						Name:      poName,
+						Namespace: namespace,
+					},
+					Profile: &crv1alpha1.ObjectReference{
+						Kind:      consts.ProfileResourceName,
+						Name:      TestProfileName,
+						Namespace: namespace,
+					},
+				},
+			},
+		},
+	}
+}
+
 // NewTestActionSet function returns a pointer to a new ActionSet test object
-func NewTestActionSet(namespace, blueprintName, poKind, poName, poNamespace, version string) *crv1alpha1.ActionSet {
+func NewTestActionSet(namespace, blueprintName, poKind, poName, poNamespace, version, action string) *crv1alpha1.ActionSet {
 	return &crv1alpha1.ActionSet{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "test-actionset-",
@@ -234,9 +281,52 @@ func NewTestActionSet(namespace, blueprintName, poKind, poName, poNamespace, ver
 		},
 		Spec: &crv1alpha1.ActionSetSpec{
 			Actions: []crv1alpha1.ActionSpec{
-				crv1alpha1.ActionSpec{
+				{
 					Blueprint: blueprintName,
-					Name:      "myAction",
+					Name:      action,
+					Object: crv1alpha1.ObjectReference{
+						Kind:      poKind,
+						Name:      poName,
+						Namespace: poNamespace,
+					},
+					Profile: &crv1alpha1.ObjectReference{
+						Kind:      consts.ProfileResourceName,
+						Name:      TestProfileName,
+						Namespace: namespace,
+					},
+					PreferredVersion: version,
+				},
+			},
+		},
+	}
+}
+
+func NewTestMultiActionActionSet(namespace, blueprintName, actionName, blueprintName1, actionName1, poKind, poName, poNamespace, version string) *crv1alpha1.ActionSet {
+	return &crv1alpha1.ActionSet{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "test-actionset-",
+			Namespace:    namespace,
+		},
+		Spec: &crv1alpha1.ActionSetSpec{
+			Actions: []crv1alpha1.ActionSpec{
+				{
+					Blueprint: blueprintName,
+					Name:      actionName,
+					Object: crv1alpha1.ObjectReference{
+						Kind:      poKind,
+						Name:      poName,
+						Namespace: poNamespace,
+					},
+					Profile: &crv1alpha1.ObjectReference{
+						Kind:      consts.ProfileResourceName,
+						Name:      TestProfileName,
+						Namespace: namespace,
+					},
+					PreferredVersion: version,
+				},
+				{
+					Blueprint: blueprintName1,
+					Name:      actionName1,
 					Object: crv1alpha1.ObjectReference{
 						Kind:      poKind,
 						Name:      poName,
@@ -255,8 +345,8 @@ func NewTestActionSet(namespace, blueprintName, poKind, poName, poNamespace, ver
 }
 
 // NewTestConfigMap function returns a pointer to a new ConfigMap test object
-func NewTestConfigMap() *v1.ConfigMap {
-	cm := &v1.ConfigMap{
+func NewTestConfigMap() *corev1.ConfigMap {
+	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "test-configmap-",
 		},
@@ -274,7 +364,7 @@ func NewTestBlueprint(poKind string, phaseFuncs ...string) *crv1alpha1.Blueprint
 			GenerateName: "test-blueprint-",
 		},
 		Actions: map[string]*crv1alpha1.BlueprintAction{
-			actionName: &crv1alpha1.BlueprintAction{
+			actionName: {
 				Kind:   "StatefulSet",
 				Phases: make([]crv1alpha1.BlueprintPhase, 0, len(phaseFuncs)),
 			},
@@ -293,11 +383,13 @@ func NewTestBlueprint(poKind string, phaseFuncs ...string) *crv1alpha1.Blueprint
 
 // ActionSetWithConfigMap function returns a pointer to a new ActionSet test object with CongigMap
 func ActionSetWithConfigMap(as *crv1alpha1.ActionSet, name string) *crv1alpha1.ActionSet {
-	as.Spec.Actions[0].ConfigMaps = map[string]crv1alpha1.ObjectReference{
-		"myCM": crv1alpha1.ObjectReference{
-			Name:      name,
-			Namespace: as.GetNamespace(),
-		},
+	for action := range as.Spec.Actions {
+		as.Spec.Actions[action].ConfigMaps = map[string]crv1alpha1.ObjectReference{
+			"myCM": {
+				Name:      name,
+				Namespace: as.GetNamespace(),
+			},
+		}
 	}
 	return as
 }
@@ -309,4 +401,197 @@ func BlueprintWithConfigMap(bp *crv1alpha1.Blueprint) *crv1alpha1.Blueprint {
 		bp.Actions[actionName].Phases[i].Args = cmArgs
 	}
 	return bp
+}
+
+func CreateSecret(cli kubernetes.Interface, namespace, name string, secrettype corev1.SecretType, data map[string][]byte) (se *corev1.Secret, err error) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: name,
+		},
+		Data: data,
+	}
+	if secrettype != "" {
+		secret.Type = secrettype
+	}
+
+	se, err = cli.CoreV1().Secrets(namespace).Create(context.Background(), secret, metav1.CreateOptions{})
+	// Since CLI doesnt return gvk of the object created, setting it manually
+	if err == nil {
+		se.APIVersion = "v1"
+		se.Kind = "Secret"
+	}
+	return se, err
+}
+
+func GetRepoPasswordSecretData(password string) map[string][]byte {
+	return map[string][]byte{
+		reposerver.RepoPasswordKey: []byte(password),
+	}
+}
+
+func GetRepoServerAdminSecretData(username, password string) map[string][]byte {
+	return map[string][]byte{
+		reposerver.AdminUsernameKey: []byte(username),
+		reposerver.AdminPasswordKey: []byte(password),
+	}
+}
+
+func GetRepoServerUserAccessSecretData(hostname, password string) map[string][]byte {
+	return map[string][]byte{
+		hostname: []byte(password),
+	}
+}
+
+func GetKopiaTLSSecretData() (map[string][]byte, error) {
+	ca := &x509.Certificate{
+		SerialNumber: big.NewInt(2019),
+		Subject: pkix.Name{
+			Organization:  []string{"Test Organization"},
+			Country:       []string{"Test Country"},
+			Province:      []string{"Test Province"},
+			Locality:      []string{"Test Locality"},
+			StreetAddress: []string{"Test Street"},
+			PostalCode:    []string{"123456"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(0, 0, 1),
+		IsCA:                  true,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	caPrivKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return nil, err
+	}
+	caBytes, err := x509.CreateCertificate(rand.Reader, ca, ca, &caPrivKey.PublicKey, caPrivKey)
+	if err != nil {
+		return nil, err
+	}
+
+	caPEM := new(bytes.Buffer)
+	err = pem.Encode(caPEM, &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: caBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	caPrivKeyPEM := new(bytes.Buffer)
+	err = pem.Encode(caPrivKeyPEM, &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(caPrivKey),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string][]byte{
+		"tls.crt": caPEM.Bytes(),
+		"tls.key": caPrivKeyPEM.Bytes(),
+	}, nil
+}
+
+func GetDefaultS3StorageCreds(c *check.C) map[string][]byte {
+	key := GetEnvOrSkip(c, s3CompliantAccessKeyIDEnv)
+	val := GetEnvOrSkip(c, s3CompliantSecretAccessKeyEnv)
+
+	return map[string][]byte{
+		secrets.AWSAccessKeyID:     []byte(key),
+		secrets.AWSSecretAccessKey: []byte(val),
+	}
+}
+
+func GetDefaultS3CompliantStorageLocation() map[string][]byte {
+	return map[string][]byte{
+		reposerver.TypeKey:     []byte(crv1alpha1.LocationTypeS3Compliant),
+		reposerver.BucketKey:   []byte(TestS3BucketName),
+		reposerver.PrefixKey:   []byte(KopiaRepositoryPath),
+		reposerver.RegionKey:   []byte(TestS3Region),
+		reposerver.EndpointKey: []byte(os.Getenv(s3CompliantLocationEndpointEnv)),
+	}
+}
+
+func CreateTestKopiaRepository(
+	ctx context.Context,
+	cli kubernetes.Interface,
+	rs *crv1alpha1.RepositoryServer,
+	storageLocation map[string][]byte,
+) error {
+	contentCacheMB, metadataCacheMB := command.GetGeneralCacheSizeSettings()
+
+	commandArgs := command.RepositoryCommandArgs{
+		CommandArgs: &command.CommandArgs{
+			RepoPassword:   KopiaRepositoryPassword,
+			ConfigFilePath: command.DefaultConfigFilePath,
+			LogDirectory:   command.DefaultLogDirectory,
+		},
+		CacheDirectory: command.DefaultCacheDirectory,
+		Hostname:       KopiaRepositoryServerHost,
+		CacheArgs: command.CacheArgs{
+			ContentCacheLimitMB:  contentCacheMB,
+			MetadataCacheLimitMB: metadataCacheMB,
+		},
+		Username:       KopiaRepositoryUser,
+		RepoPathPrefix: KopiaRepositoryPath,
+		Location:       storageLocation,
+	}
+	return repository.ConnectToOrCreateKopiaRepository(
+		ctx,
+		cli,
+		rs.Namespace,
+		rs.Status.ServerInfo.PodName,
+		DefaultKopiaRepositoryServerContainer,
+		commandArgs,
+	)
+}
+
+func GetTestKopiaRepositoryServerCR(namespace string) crv1alpha1.RepositoryServer {
+	repositoryServer := crv1alpha1.RepositoryServer{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "test-kopia-repo-server-",
+			Namespace:    namespace,
+		},
+		Spec: crv1alpha1.RepositoryServerSpec{
+			Storage: crv1alpha1.Storage{
+				SecretRef: corev1.SecretReference{
+					Namespace: namespace,
+				},
+				CredentialSecretRef: corev1.SecretReference{
+					Namespace: namespace,
+				},
+			},
+			Repository: crv1alpha1.Repository{
+				RootPath: KopiaRepositoryPath,
+				Username: KopiaRepositoryUser,
+				Hostname: KopiaRepositoryServerHost,
+				PasswordSecretRef: corev1.SecretReference{
+					Namespace: namespace,
+				},
+			},
+			Server: crv1alpha1.Server{
+				UserAccess: crv1alpha1.UserAccess{
+					UserAccessSecretRef: corev1.SecretReference{
+						Namespace: namespace,
+					},
+					Username: KopiaRepositoryServerAccessUser,
+				},
+				AdminSecretRef: corev1.SecretReference{
+					Namespace: namespace,
+				},
+				TLSSecretRef: corev1.SecretReference{
+					Namespace: namespace,
+				},
+			},
+		},
+	}
+	return repositoryServer
+}
+
+func GetFileStoreLocationSecretData(claimName string) map[string][]byte {
+	return map[string][]byte{
+		reposerver.TypeKey:      []byte(reposerver.LocTypeFilestore),
+		reposerver.ClaimNameKey: []byte(claimName),
+	}
 }

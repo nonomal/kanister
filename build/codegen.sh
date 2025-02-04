@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Copyright 2019 The Kanister Authors.
-# 
+#
 # Copyright 2016 The Rook Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,12 +22,22 @@ set -o xtrace
 
 export GO111MODULE=on
 go mod download
-execDir="/root/go/pkg/mod/k8s.io/code-generator@$(go list -f '{{.Version}}' -m k8s.io/code-generator)"
-chmod +x "${execDir}"/generate-groups.sh
-"${execDir}"/generate-groups.sh                         \
-  all                                        \
-  github.com/kanisterio/kanister/pkg/client  \
-  github.com/kanisterio/kanister/pkg/apis    \
-  "cr:v1alpha1"                              \
-  --go-header-file "${execDir}"/hack/boilerplate.go.txt \
-  -o /go/src/
+execDir="/go/pkg/mod/k8s.io/code-generator@$(go list -f '{{.Version}}' -m k8s.io/code-generator)"
+boilerplateFile="$(pwd)"/build/boilerplate.go.txt
+
+source "${execDir}"/kube_codegen.sh
+
+kube::codegen::gen_helpers \
+--boilerplate  "${boilerplateFile}" \
+--extra-peer-dir  ./pkg/client  \
+--extra-peer-dir  ./pkg/apis  \
+go/src/
+
+kube::codegen::gen_client \
+--with-applyconfig \
+--with-watch \
+--boilerplate  "${boilerplateFile}" \
+--output-dir ./pkg/client \
+--output-pkg  github.com/kanisterio/kanister/pkg/client \
+./pkg/apis
+

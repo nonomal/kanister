@@ -17,8 +17,8 @@ package function
 import (
 	"context"
 
-	. "gopkg.in/check.v1"
-	v1 "k8s.io/api/core/v1"
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -49,9 +49,9 @@ type CreateCSISnapshotTestSuite struct {
 	storageClass        string
 }
 
-var _ = Suite(&CreateCSISnapshotTestSuite{})
+var _ = check.Suite(&CreateCSISnapshotTestSuite{})
 
-func (testSuite *CreateCSISnapshotTestSuite) SetUpSuite(c *C) {
+func (testSuite *CreateCSISnapshotTestSuite) SetUpSuite(c *check.C) {
 	testSuite.volumeSnapshotClass = snapshotClass
 	testSuite.storageClass = storageClass
 	testSuite.pvcName = pvcName
@@ -59,63 +59,45 @@ func (testSuite *CreateCSISnapshotTestSuite) SetUpSuite(c *C) {
 	testSuite.namespace = testCreateNamespace
 }
 
-func (testSuite *CreateCSISnapshotTestSuite) TestCreateCSISnapshot(c *C) {
-	for _, apiResourceList := range []*metav1.APIResourceList{
-		{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "VolumeSnapshot",
-				APIVersion: "v1alpha1",
-			},
-			GroupVersion: "snapshot.storage.k8s.io/v1alpha1",
+func (testSuite *CreateCSISnapshotTestSuite) TestCreateCSISnapshot(c *check.C) {
+	api := &metav1.APIResourceList{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "VolumeSnapshot",
+			APIVersion: "v1",
 		},
-		{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "VolumeSnapshot",
-				APIVersion: "v1beta1",
-			},
-			GroupVersion: "snapshot.storage.k8s.io/v1beta1",
-		},
-		{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "VolumeSnapshot",
-				APIVersion: "v1",
-			},
-			GroupVersion: "snapshot.storage.k8s.io/v1",
-		},
-	} {
-		ctx := context.Background()
-		fakeCli := fake.NewSimpleClientset()
-		fakeCli.Resources = []*metav1.APIResourceList{apiResourceList}
-
-		_, err := fakeCli.CoreV1().Namespaces().Create(ctx, &v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testSuite.namespace}}, metav1.CreateOptions{})
-		c.Assert(err, IsNil)
-
-		scheme := runtime.NewScheme()
-		fakeSnapshotter, err := snapshot.NewSnapshotter(fakeCli, dynfake.NewSimpleDynamicClient(scheme))
-		c.Assert(err, IsNil)
-
-		_, err = fakeCli.CoreV1().PersistentVolumeClaims(testSuite.namespace).Create(ctx, getPVCManifest(testSuite.pvcName, testSuite.storageClass), metav1.CreateOptions{})
-		c.Assert(err, IsNil)
-
-		_, err = createCSISnapshot(ctx, fakeSnapshotter, testSuite.snapName, testSuite.namespace, testSuite.pvcName, testSuite.volumeSnapshotClass, false, nil)
-		c.Assert(err, IsNil)
-
-		err = fakeCli.CoreV1().Namespaces().Delete(ctx, testSuite.namespace, metav1.DeleteOptions{})
-		c.Assert(err, IsNil)
+		GroupVersion: "snapshot.storage.k8s.io/v1",
 	}
+	ctx := context.Background()
+	fakeCli := fake.NewSimpleClientset()
+	fakeCli.Resources = []*metav1.APIResourceList{api}
+
+	_, err := fakeCli.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testSuite.namespace}}, metav1.CreateOptions{})
+	c.Assert(err, check.IsNil)
+
+	scheme := runtime.NewScheme()
+	fakeSnapshotter := snapshot.NewSnapshotter(fakeCli, dynfake.NewSimpleDynamicClient(scheme))
+
+	_, err = fakeCli.CoreV1().PersistentVolumeClaims(testSuite.namespace).Create(ctx, getPVCManifest(testSuite.pvcName, testSuite.storageClass), metav1.CreateOptions{})
+	c.Assert(err, check.IsNil)
+
+	_, err = createCSISnapshot(ctx, fakeSnapshotter, testSuite.snapName, testSuite.namespace, testSuite.pvcName, testSuite.volumeSnapshotClass, false, nil)
+	c.Assert(err, check.IsNil)
+
+	err = fakeCli.CoreV1().Namespaces().Delete(ctx, testSuite.namespace, metav1.DeleteOptions{})
+	c.Assert(err, check.IsNil)
 }
 
-func getPVCManifest(pvcName, storageClassName string) *v1.PersistentVolumeClaim {
-	return &v1.PersistentVolumeClaim{
+func getPVCManifest(pvcName, storageClassName string) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: pvcName,
 		},
-		Spec: v1.PersistentVolumeClaimSpec{
+		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &storageClassName,
-			AccessModes:      []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
-			Resources: v1.ResourceRequirements{
-				Requests: v1.ResourceList{
-					v1.ResourceStorage: resource.MustParse("1Gi"),
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("1Gi"),
 				},
 			},
 		},

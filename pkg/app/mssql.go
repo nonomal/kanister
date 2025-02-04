@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	appsv1 "k8s.io/api/apps/v1"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
@@ -32,9 +32,9 @@ type MssqlDB struct {
 	namespace  string
 	name       string
 	deployment *appsv1.Deployment
-	service    *v1.Service
-	pvc        *v1.PersistentVolumeClaim
-	secret     *v1.Secret
+	service    *corev1.Service
+	pvc        *corev1.PersistentVolumeClaim
+	secret     *corev1.Secret
 }
 
 func NewMssqlDB(name string) App {
@@ -168,7 +168,7 @@ func (m *MssqlDB) Ping(ctx context.Context) error {
 	loginMssql := []string{"sh", "-c", count}
 	_, stderr, err := m.execCommand(ctx, loginMssql)
 	if err != nil {
-		return errors.Wrapf(err, "Error while Pinging the database: %s", stderr)
+		return errkit.Wrap(err, "Error while Pinging the database", "stderr", stderr)
 	}
 	log.Print("Ping to the application was success.", field.M{"app": m.name})
 	return nil
@@ -182,7 +182,7 @@ func (m *MssqlDB) Insert(ctx context.Context) error {
 	insertQuery := []string{"sh", "-c", insert}
 	_, stderr, err := m.execCommand(ctx, insertQuery)
 	if err != nil {
-		return errors.Wrapf(err, "Error while inserting data into table: %s", stderr)
+		return errkit.Wrap(err, "Error while inserting data into table", "stderr", stderr)
 	}
 	return nil
 }
@@ -195,11 +195,11 @@ func (m *MssqlDB) Count(ctx context.Context) (int, error) {
 	insertQuery := []string{"sh", "-c", insert}
 	stdout, stderr, err := m.execCommand(ctx, insertQuery)
 	if err != nil {
-		return 0, errors.Wrapf(err, "Error while inserting data into table: %s", stderr)
+		return 0, errkit.Wrap(err, "Error while inserting data into table", "stderr", stderr)
 	}
 	rowsReturned, err := strconv.Atoi(strings.TrimSpace(strings.Split(stdout, "\n")[1]))
 	if err != nil {
-		return 0, errors.Wrapf(err, "Error while converting response of count query: %s", stderr)
+		return 0, errkit.Wrap(err, "Error while converting response of count query", "stderr", stderr)
 	}
 	return rowsReturned, nil
 }
@@ -210,7 +210,7 @@ func (m *MssqlDB) Reset(ctx context.Context) error {
 	deleteQuery := []string{"sh", "-c", delete}
 	_, stderr, err := m.execCommand(ctx, deleteQuery)
 	if err != nil {
-		return errors.Wrapf(err, "Error while inserting data into table: %s", stderr)
+		return errkit.Wrap(err, "Error while inserting data into table", "stderr", stderr)
 	}
 	return nil
 }
@@ -225,13 +225,13 @@ func (m *MssqlDB) Initialize(ctx context.Context) error {
 	execQuery := []string{"sh", "-c", createDB}
 	_, stderr, err := m.execCommand(ctx, execQuery)
 	if err != nil {
-		return errors.Wrapf(err, "Error while creating the database: %s", stderr)
+		return errkit.Wrap(err, "Error while creating the database", "stderr", stderr)
 	}
 
 	execQuery = []string{"sh", "-c", createTable}
 	_, stderr, err = m.execCommand(ctx, execQuery)
 	if err != nil {
-		return errors.Wrapf(err, "Error while creating table: %s", stderr)
+		return errkit.Wrap(err, "Error while creating table", "stderr", stderr)
 	}
 	return nil
 }
@@ -243,9 +243,9 @@ func (m *MssqlDB) GetClusterScopedResources(ctx context.Context) []crv1alpha1.Ob
 func (m MssqlDB) execCommand(ctx context.Context, command []string) (string, string, error) {
 	podName, containerName, err := kube.GetPodContainerFromDeployment(ctx, m.cli, m.namespace, m.deployment.Name)
 	if err != nil || podName == "" {
-		return "", "", errors.Wrapf(err, "Error getting pod and container name for app %s.", m.name)
+		return "", "", errkit.Wrap(err, "Error getting pod and container name for app.", "app", m.name)
 	}
-	return kube.Exec(m.cli, m.namespace, podName, containerName, command, nil)
+	return kube.Exec(ctx, m.cli, m.namespace, podName, containerName, command, nil)
 }
 
 func (m *MssqlDB) getDeploymentObj() (*appsv1.Deployment, error) {
@@ -272,7 +272,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: mssql
-          image: mcr.microsoft.com/mssql/server:2019-latest
+          image: mcr.microsoft.com/mssql/server:2019-CU27-ubuntu-20.04
           ports:
             - containerPort: 1433
           env:
@@ -298,7 +298,7 @@ spec:
 	return deployment, err
 }
 
-func (m *MssqlDB) getPVCObj() (*v1.PersistentVolumeClaim, error) {
+func (m *MssqlDB) getPVCObj() (*corev1.PersistentVolumeClaim, error) {
 	pvcmaniFest :=
 		`kind: PersistentVolumeClaim
 apiVersion: v1
@@ -311,12 +311,12 @@ spec:
     requests:
       storage: 4Gi`
 
-	var pvc *v1.PersistentVolumeClaim
+	var pvc *corev1.PersistentVolumeClaim
 	err := yaml.Unmarshal([]byte(pvcmaniFest), &pvc)
 	return pvc, err
 }
 
-func (m *MssqlDB) getServiceObj() (*v1.Service, error) {
+func (m *MssqlDB) getServiceObj() (*corev1.Service, error) {
 	serviceManifest :=
 		`apiVersion: v1
 kind: Service
@@ -331,13 +331,13 @@ spec:
       targetPort: 1433
   type: ClusterIP`
 
-	var service *v1.Service
+	var service *corev1.Service
 	err := yaml.Unmarshal([]byte(serviceManifest), &service)
 	return service, err
 }
 
-func (m MssqlDB) getSecretObj() *v1.Secret {
-	return &v1.Secret{
+func (m MssqlDB) getSecretObj() *corev1.Secret {
+	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: m.name,
 		},

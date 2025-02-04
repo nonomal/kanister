@@ -1,12 +1,29 @@
+// Copyright 2023 The Kanister Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package secrets
 
 import (
+	"github.com/kanisterio/errkit"
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/kanisterio/kanister/pkg/objectstore"
-	"github.com/pkg/errors"
-	v1 "k8s.io/api/core/v1"
+	secerrors "github.com/kanisterio/kanister/pkg/secrets/errors"
 )
 
 const (
+	// AzureSecretType represents the secret type for Azure credentials.
 	AzureSecretType string = "secrets.kanister.io/azure"
 
 	// AzureStorageAccountID is the config map key for Azure storage account id data
@@ -27,9 +44,9 @@ const (
 //
 // Optional field:
 // - azure_storage_environment
-func ValidateAzureCredentials(secret *v1.Secret) error {
+func ValidateAzureCredentials(secret *corev1.Secret) error {
 	if string(secret.Type) != AzureSecretType {
-		return errors.New("Secret is not Azure secret")
+		return errkit.Wrap(secerrors.ErrValidate, secerrors.IncompatibleSecretTypeErrorMsg, AzureSecretType, secret.Namespace, secret.Name)
 	}
 	count := 0
 	if _, ok := secret.Data[AzureStorageAccountID]; ok {
@@ -42,7 +59,7 @@ func ValidateAzureCredentials(secret *v1.Secret) error {
 		count++
 	}
 	if len(secret.Data) > count {
-		return errors.New("Secret has an unknown field")
+		return errkit.New("Secret has an unknown field")
 	}
 	return nil
 }
@@ -56,7 +73,7 @@ func ValidateAzureCredentials(secret *v1.Secret) error {
 //
 // If the type of the secret is not "secrets.kanister.io/azure", it returns an error.
 // If the required types are not available in the secrets, it returns an error.
-func ExtractAzureCredentials(secret *v1.Secret) (*objectstore.SecretAzure, error) {
+func ExtractAzureCredentials(secret *corev1.Secret) (*objectstore.SecretAzure, error) {
 	if err := ValidateAzureCredentials(secret); err != nil {
 		return nil, err
 	}
@@ -71,7 +88,7 @@ func ExtractAzureCredentials(secret *v1.Secret) (*objectstore.SecretAzure, error
 		azSecret.EnvironmentName = string(envName)
 	}
 	if azSecret.StorageAccount == "" || azSecret.StorageKey == "" {
-		return nil, errors.New("Azure secret is missing storage account ID or storage key")
+		return nil, errkit.New("Azure secret is missing storage account ID or storage key")
 	}
 	return azSecret, nil
 }

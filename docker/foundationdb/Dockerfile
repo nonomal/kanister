@@ -1,6 +1,6 @@
-FROM foundationdb/foundationdb:6.2.20
+FROM foundationdb/foundationdb:6.3.22
 
-MAINTAINER "Tom Manville <tom@kasten.io>"
+LABEL maintainer="Kanister maintainers<kanister.maintainers@veeam.com>"
 
 # Install kando 
-ADD kando /usr/local/bin/
+RUN curl https://raw.githubusercontent.com/kanisterio/kanister/master/scripts/get.sh | bash

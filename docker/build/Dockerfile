@@ -1,23 +1,41 @@
-FROM alpine:3.10.5
+FROM golang:1.23-bullseye
+LABEL maintainer="Kanister maintainers<kanister.maintainers@veeam.com>"
 
-LABEL maintainer="Tom Manville<tom@kasten.io>"
+ARG TARGETPLATFORM
 
-RUN apk add --update --no-cache ca-certificates bash git docker curl jq \
-    && update-ca-certificates \
-    && rm -rf /var/cache/apk/*
+RUN apt-get update && apt-get -y install \
+    apt-transport-https bash ca-certificates curl git gnupg2 jq protobuf-compiler software-properties-common wget \
+    && update-ca-certificates
 
-COPY --from=golang:1.17.6-alpine3.15 /usr/local/go/ /usr/local/go/
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
 
-COPY --from=bitnami/kubectl:1.17 /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/
+RUN apt update && apt install -y docker-ce docker-ce-cli containerd.io \
+    && apt-get clean
 
-COPY --from=goreleaser/goreleaser:v1.2.4 /usr/local/bin/goreleaser /usr/local/bin/
+COPY --from=bitnami/kubectl:1.26 /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/
 
-COPY --from=alpine/helm:3.2.0 /usr/bin/helm /usr/local/bin/
+COPY --from=goreleaser/goreleaser:v1.26.2 /usr/bin/goreleaser /usr/local/bin/
 
-COPY --from=golangci/golangci-lint:v1.23.7 /usr/bin/golangci-lint /usr/local/bin/
+COPY --from=alpine/helm:3.12.2 /usr/bin/helm /usr/local/bin/
 
-RUN wget -O /usr/local/bin/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.11.1/kind-linux-amd64 \
+COPY --from=golangci/golangci-lint:v1.60.1 /usr/bin/golangci-lint /usr/local/bin/
+
+RUN wget -O /usr/local/bin/kind \
+      https://github.com/kubernetes-sigs/kind/releases/download/v0.18.0/kind-$(echo $TARGETPLATFORM | tr / -) \
     && chmod +x /usr/local/bin/kind
+
+RUN git config --global --add safe.directory /go/src/github.com/kanisterio/kanister
+
+# Adding CRD documentation generation tool.
+RUN GOBIN=/usr/local/bin go install github.com/ahmetb/gen-crd-api-reference-docs@v0.3.0
+
+RUN apt-get update && apt-get install -y pip
+
+COPY requirements.txt requirements.txt
+RUN pip install -r requirements.txt
+
+RUN apt-get install -y vim
 
 ENV CGO_ENABLED=0 \
     GO111MODULE="on" \

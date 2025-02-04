@@ -18,18 +18,18 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 )
 
 // NewDirectory returns a virtual FS root directory
 func NewDirectory(rootName string) (*Directory, error) {
 	if strings.Contains(rootName, "/") {
-		return nil, errors.New("Root name cannot contain '/'")
+		return nil, errkit.New("Root name cannot contain '/'")
 	}
 	return &Directory{
 		dirEntry: dirEntry{
 			name: rootName,
-			mode: 0777 | os.ModeDir, // nolint:gomnd
+			mode: 0777 | os.ModeDir, //nolint:gomnd
 		},
 	}, nil
 }

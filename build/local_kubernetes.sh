@@ -15,11 +15,12 @@ export MINIKUBE_WANTREPORTERRORPROMPT=false
 export MINIKUBE_HOME=$HOME
 export CHANGE_MINIKUBE_NONE_USER=true
 export KUBECONFIG=$HOME/.kube/config
-export KUBE_VERSION=${KUBE_VERSION:-"v1.21.1"}
-export KIND_VERSION=${KIND_VERSION:-"v0.11.1"}
+export KUBE_VERSION=${KUBE_VERSION:-"v1.26.0"}
+export KIND_VERSION=${KIND_VERSION:-"v0.18.0"}
 export LOCAL_CLUSTER_NAME=${LOCAL_CLUSTER_NAME:-"kanister"}
 export LOCAL_PATH_PROV_VERSION="v0.0.11"
-export SNAPSHOTTER_VERSION="v5.0.0"
+export SNAPSHOTTER_VERSION="v6.2.1"
+export HOSTPATH_DRIVER_VERSION="v1.12.1"
 declare -a REQUIRED_BINS=( docker jq go )
 
 if command -v apt-get
@@ -48,6 +49,9 @@ check_or_get_dependencies() {
     done
 }
 
+# This function is not used to create Kubernetes cluster in CI anymore. We are
+# using `helm/kind-action@v1.4.0` instead in our github actions source file
+# `.github/workflows/main.yaml` to create the cluster
 start_localkube() {
     if ! command -v kind
     then
@@ -70,13 +74,44 @@ install_csi_hostpath_driver() {
     kubectl apply -fhttps://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/${SNAPSHOTTER_VERSION}/deploy/kubernetes/snapshot-controller/{rbac-snapshot-controller.yaml,setup-snapshot-controller.yaml}
 
     # Deploy the CSI Hostpath Driver
-    cd /tmp
-    git clone https://github.com/kubernetes-csi/csi-driver-host-path.git
-    cd csi-driver-host-path
-    ./deploy/kubernetes-1.21/deploy.sh
+    pushd /tmp
+      git clone https://github.com/kubernetes-csi/csi-driver-host-path.git
+      pushd csi-driver-host-path
+        git checkout ${HOSTPATH_DRIVER_VERSION}
+        sed -i 's/mountPropagation: Bidirectional/\#mountPropagation: Bidirectional/g' deploy/kubernetes-latest/hostpath/csi-hostpath-plugin.yaml
 
-    # Create StorageClass
-    kubectl apply -f ./examples/csi-storageclass.yaml
+        ./deploy/kubernetes-latest/deploy.sh
+
+        # Create StorageClass
+        kubectl apply -f ./examples/csi-storageclass.yaml
+      popd
+    popd
+}
+
+check_csi_hostpath_driver_installed() {
+    # Check VolumeSnapshot CRDs are installed
+    if ! kubectl diff -fhttps://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/${SNAPSHOTTER_VERSION}/client/config/crd/snapshot.storage.k8s.io_{volumesnapshots.yaml,volumesnapshotclasses.yaml,volumesnapshotcontents.yaml} 2>&1 > /dev/null ; then
+        echo "VolumeSnapshot CRDs are not installed."
+        exit 1
+    fi
+
+    # Check snapshot controller created
+    if ! kubectl diff -fhttps://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/${SNAPSHOTTER_VERSION}/deploy/kubernetes/snapshot-controller/{rbac-snapshot-controller.yaml,setup-snapshot-controller.yaml} 2>&1 > /dev/null ; then
+        echo "Snapshot controller is not created."
+        exit 1
+    fi
+
+    # Deploy the CSI Hostpath Driver
+    pushd /tmp
+      git clone https://github.com/kubernetes-csi/csi-driver-host-path.git
+      pushd csi-driver-host-path
+        # Check StorageClass created
+        if ! kubectl diff -f ./examples/csi-storageclass.yaml 2>&1 > /dev/null ; then
+            echo "StorageClass is not created."
+            exit 1
+        fi
+      popd
+    popd
 }
 
 stop_localkube() {
@@ -154,6 +189,9 @@ EOM
 check_or_get_dependencies
 case "${1}" in
         # Alphabetically sorted
+        check_csi_hostpath_driver_installed)
+            time -p check_csi_hostpath_driver_installed
+            ;;
         get_localkube)
             time -p get_localkube
             ;;

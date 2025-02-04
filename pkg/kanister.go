@@ -19,8 +19,9 @@ import (
 	"sync"
 
 	"github.com/Masterminds/semver"
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	"github.com/kanisterio/kanister/pkg/param"
 )
 
@@ -39,6 +40,8 @@ type Func interface {
 	RequiredArgs() []string
 	Arguments() []string
 	Exec(context.Context, param.TemplateParams, map[string]interface{}) (map[string]interface{}, error)
+	ExecutionProgress() (crv1alpha1.PhaseProgress, error)
+	Validate(map[string]any) error
 }
 
 // Register allows Funcs to be referenced by User Defined YAMLs
@@ -47,7 +50,7 @@ func Register(f Func) error {
 	funcMu.Lock()
 	defer funcMu.Unlock()
 	if f == nil {
-		return errors.Errorf("kanister: Cannot register nil function")
+		return errkit.New("kanister: Cannot register nil function")
 	}
 	if _, ok := funcs[f.Name()][version]; ok {
 		panic("kanister: Register called twice for function " + f.Name() + " with version " + DefaultVersion)
@@ -77,7 +80,7 @@ func RegisterVersion(f Func, v string) error {
 	funcMu.Lock()
 	defer funcMu.Unlock()
 	if f == nil {
-		return errors.Errorf("kanister: Cannot register nil function")
+		return errkit.New("kanister: Cannot register nil function")
 	}
 	if _, ok := funcs[f.Name()][version]; ok {
 		panic("kanister: Register called twice for function " + f.Name() + " with version " + v)

@@ -14,7 +14,22 @@
 
 package utils
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/kanisterio/errkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/kanisterio/kanister/pkg/field"
+	"github.com/kanisterio/kanister/pkg/log"
+)
 
 type indicator string
 
@@ -35,4 +50,90 @@ func PrintStage(description string, i indicator) {
 	default:
 		fmt.Println(description)
 	}
+}
+
+// GetNamespaceUID gets the UID of the given namespace
+func GetNamespaceUID(ctx context.Context, cli kubernetes.Interface, namespace string) (string, error) {
+	ns, err := cli.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		return "", errkit.Wrap(err, "Failed to get namespace", "namespace", namespace)
+	}
+	return string(ns.GetUID()), nil
+}
+
+func GetEnvAsIntOrDefault(envKey string, def int) int {
+	if v, ok := os.LookupEnv(envKey); ok {
+		iv, err := strconv.Atoi(v)
+		if err == nil {
+			return iv
+		}
+		log.WithError(err).Print("Conversion to integer failed. Using default value", field.M{envKey: v, "default_value": def})
+	}
+
+	return def
+}
+
+func GetEnvAsStringOrDefault(envKey string, def string) string {
+	if v, ok := os.LookupEnv(envKey); ok {
+		return v
+	}
+
+	return def
+}
+
+func GetIntOrDefault(value string, defaultValue int) (int, error) {
+	v, err := strconv.Atoi(value)
+	if err != nil {
+		v = defaultValue
+		return v, errkit.New("conversion to integer failed, using default value for the field")
+	}
+	return v, nil
+}
+
+// DurationToString formats the given duration into a short format which eludes trailing zero units in the string.
+func DurationToString(d time.Duration) string {
+	s := d.String()
+
+	if strings.HasSuffix(s, "h0m0s") {
+		return s[:len(s)-4]
+	}
+
+	if strings.HasSuffix(s, "m0s") {
+		return s[:len(s)-2]
+	}
+
+	return s
+}
+
+// RoundUpDuration rounds duration to highest set duration unit
+func RoundUpDuration(t time.Duration) time.Duration {
+	if t < time.Minute {
+		return t.Round(time.Second)
+	}
+	if t < time.Hour {
+		return t.Round(time.Minute)
+	}
+	return t.Round(time.Hour)
+}
+
+// CheckRequiredArgs checks if the required args of a function `reqArgs` are
+// provided in created blueprint's functions' args (`args`).
+func CheckRequiredArgs(reqArgs []string, args map[string]interface{}) error {
+	for _, a := range reqArgs {
+		if _, ok := args[a]; !ok {
+			return errkit.New(fmt.Sprintf("Required arg missing: %s", a))
+		}
+	}
+	return nil
+}
+
+// CheckSupportedArgs checks that all the provided (using blueprint) args of a function
+// are supported by the kanister function.
+func CheckSupportedArgs(supportedArgs []string, args map[string]interface{}) error {
+	for a := range args {
+		if !slices.Contains(supportedArgs, a) {
+			return errkit.New(fmt.Sprintf("argument %s is not supported", a))
+		}
+	}
+	return nil
 }

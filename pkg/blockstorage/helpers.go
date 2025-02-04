@@ -17,6 +17,8 @@ package blockstorage
 import (
 	"bytes"
 
+	azto "github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+
 	ktags "github.com/kanisterio/kanister/pkg/blockstorage/tags"
 )
 
@@ -30,8 +32,8 @@ const (
 	AzureStorageKey            = "AZURE_STORAGE_ACCOUNT_KEY"
 	AzureSubscriptionID        = "AZURE_SUBSCRIPTION_ID"
 	AzureTenantID              = "AZURE_TENANT_ID"
-	AzureCientID               = "AZURE_CLIENT_ID"
-	AzureClentSecret           = "AZURE_CLIENT_SECRET"
+	AzureClientID              = "AZURE_CLIENT_ID"
+	AzureClientSecret          = "AZURE_CLIENT_SECRET"
 	AzureResurceGroup          = "AZURE_RESOURCE_GROUP"
 	AzureResurceMgrEndpoint    = "AZURE_RESOURCE_MANAGER_ENDPOINT"
 	AzureMigrateStorageAccount = "AZURE_MIGRATE_STORAGE_ACCOUNT_NAME"
@@ -39,7 +41,7 @@ const (
 	AzureMigrateResourceGroup  = "AZURE_MIGRATE_RESOURCE_GROUP"
 	AzureActiveDirEndpoint     = "AZURE_AD_ENDPOINT"
 	AzureActiveDirResourceID   = "AZURE_AD_RESOURCE"
-	AzureCloudEnviornmentID    = "AZURE_CLOUD_ENV_ID"
+	AzureCloudEnvironmentID    = "AZURE_CLOUD_ENV_ID"
 )
 
 // SanitizeTags are used to sanitize the tags
@@ -104,4 +106,95 @@ func FilterSnapshotsWithTags(snapshots []*Snapshot, tags map[string]string) []*S
 		}
 	}
 	return result
+}
+
+// utility functions equivalent to old functions from package `go-autorest/autorest/to`
+
+// StringMapPtr returns a pointer to a map of string pointers built from the passed map of strings.
+func StringMapPtr(ms map[string]string) *map[string]*string {
+	msp := make(map[string]*string, len(ms))
+	for k, s := range ms {
+		msp[k] = azto.Ptr(s)
+	}
+	return &msp
+}
+
+// StringMap returns a map of strings built from the map of string pointers. The empty string is
+// used for nil pointers.
+func StringMap(msp map[string]*string) map[string]string {
+	ms := make(map[string]string, len(msp))
+	for k, sp := range msp {
+		if sp != nil {
+			ms[k] = *sp
+		} else {
+			ms[k] = ""
+		}
+	}
+	return ms
+}
+
+// StringSlice returns a string slice value for the passed string slice pointer. It returns a nil
+// slice if the pointer is nil.
+func StringSlice(s *[]string) []string {
+	if s != nil {
+		return *s
+	}
+	return nil
+}
+
+// SliceStringPtr returns a slice of string pointers from the passed string slice.
+func SliceStringPtr(s []string) []*string {
+	ms := make([]*string, len(s))
+	for k, sp := range s {
+		ms[k] = azto.Ptr(sp)
+	}
+	return ms
+}
+
+// Int returns an int value for the passed int pointer. It returns 0 if the pointer is nil.
+func Int(i *int) int {
+	if i != nil {
+		return *i
+	}
+	return 0
+}
+
+// IntPtr returns a pointer to the passed int.
+func IntPtr(i int) *int {
+	return &i
+}
+
+// Int32 returns an int value for the passed int pointer. It returns 0 if the pointer is nil.
+func Int32(i *int32) int32 {
+	if i != nil {
+		return *i
+	}
+	return 0
+}
+
+// Int32Ptr returns a pointer to the passed int32.
+func Int32Ptr(i int32) *int32 {
+	return &i
+}
+
+// Int64 returns an int value for the passed int pointer. It returns 0 if the pointer is nil.
+func Int64(i *int64) int64 {
+	if i != nil {
+		return *i
+	}
+	return 0
+}
+
+// StringFromPtr returns a string value for the passed string pointer.
+// It returns the empty string if the pointer is nil.
+func StringFromPtr(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return ""
+}
+
+// StringPtr returns a pointer to the passed string.
+func StringPtr(s string) *string {
+	return &s
 }

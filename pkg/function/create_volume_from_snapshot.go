@@ -17,20 +17,25 @@ package function
 import (
 	"context"
 	"encoding/json"
+	"time"
 
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	kanister "github.com/kanisterio/kanister/pkg"
+	crv1alpha1 "github.com/kanisterio/kanister/pkg/apis/cr/v1alpha1"
 	awsconfig "github.com/kanisterio/kanister/pkg/aws"
 	"github.com/kanisterio/kanister/pkg/blockstorage"
 	"github.com/kanisterio/kanister/pkg/blockstorage/getter"
+	"github.com/kanisterio/kanister/pkg/consts"
 	"github.com/kanisterio/kanister/pkg/field"
 	"github.com/kanisterio/kanister/pkg/kube"
 	kubevolume "github.com/kanisterio/kanister/pkg/kube/volume"
 	"github.com/kanisterio/kanister/pkg/log"
 	"github.com/kanisterio/kanister/pkg/param"
+	"github.com/kanisterio/kanister/pkg/progress"
+	"github.com/kanisterio/kanister/pkg/utils"
 )
 
 func init() {
@@ -49,7 +54,9 @@ const (
 	CreateVolumeFromSnapshotPVCNamesArg  = "pvcNames"
 )
 
-type createVolumeFromSnapshotFunc struct{}
+type createVolumeFromSnapshotFunc struct {
+	progressPercent string
+}
 
 func (*createVolumeFromSnapshotFunc) Name() string {
 	return CreateVolumeFromSnapshotFuncName
@@ -59,10 +66,10 @@ func createVolumeFromSnapshot(ctx context.Context, cli kubernetes.Interface, nam
 	PVCData := []VolumeSnapshotInfo{}
 	err := json.Unmarshal([]byte(snapshotinfo), &PVCData)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Could not decode JSON data")
+		return nil, errkit.Wrap(err, "Could not decode JSON data")
 	}
 	if len(pvcNames) > 0 && len(pvcNames) != len(PVCData) {
-		return nil, errors.New("Invalid number of PVC names provided")
+		return nil, errkit.New("Invalid number of PVC names provided")
 	}
 	// providerList required for unit testing
 	providerList := make(map[string]blockstorage.Provider)
@@ -72,7 +79,7 @@ func createVolumeFromSnapshot(ctx context.Context, cli kubernetes.Interface, nam
 			pvcName = pvcNames[i]
 		}
 		if err = ValidateLocationForBlockstorage(profile, pvcInfo.Type); err != nil {
-			return nil, errors.Wrap(err, "Profile validation failed")
+			return nil, errkit.Wrap(err, "Profile validation failed")
 		}
 		config := getConfig(profile, pvcInfo.Type)
 		if pvcInfo.Type == blockstorage.TypeEBS {
@@ -81,7 +88,7 @@ func createVolumeFromSnapshot(ctx context.Context, cli kubernetes.Interface, nam
 
 		provider, err := getter.Get(pvcInfo.Type, config)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Could not get storage provider %v", pvcInfo.Type)
+			return nil, errkit.Wrap(err, "Could not get storage provider", "provider", pvcInfo.Type)
 		}
 		_, err = cli.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
 		if err == nil {
@@ -91,7 +98,7 @@ func createVolumeFromSnapshot(ctx context.Context, cli kubernetes.Interface, nam
 		}
 		snapshot, err := provider.SnapshotGet(ctx, pvcInfo.SnapshotID)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Failed to get Snapshot from Provider")
+			return nil, errkit.Wrap(err, "Failed to get Snapshot from Provider")
 		}
 
 		tags := map[string]string{
@@ -102,17 +109,19 @@ func createVolumeFromSnapshot(ctx context.Context, cli kubernetes.Interface, nam
 		snapshot.Volume.Tags = pvcInfo.Tags
 		vol, err := provider.VolumeCreateFromSnapshot(ctx, *snapshot, tags)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Failed to create volume from snapshot, snapID: %s", snapshot.ID)
+			return nil, errkit.Wrap(err, "Failed to create volume from snapshot", "snapID", snapshot.ID)
 		}
 
 		annotations := map[string]string{}
 		pvc, err := kubevolume.CreatePVC(ctx, cli, namespace, pvcName, vol.SizeInBytes, vol.ID, annotations, nil, nil)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Unable to create PVC for volume %v", *vol)
+			return nil, errkit.Wrap(err, "Unable to create PVC for volume", "volume", *vol)
 		}
-		pv, err := kubevolume.CreatePV(ctx, cli, vol, vol.Type, annotations, nil, nil)
+
+		pvAnnotations := addPVProvisionedByAnnotation(nil, provider)
+		pv, err := kubevolume.CreatePV(ctx, cli, vol, vol.Type, pvAnnotations, nil, nil)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Unable to create PV for volume %v", *vol)
+			return nil, errkit.Wrap(err, "Unable to create PV for volume", "volume", *vol)
 		}
 		log.WithContext(ctx).Print("Restore/Create volume from snapshot completed", field.M{"PVC": pvc, "Volume": pv})
 		providerList[pvcInfo.PVCName] = provider
@@ -120,10 +129,30 @@ func createVolumeFromSnapshot(ctx context.Context, cli kubernetes.Interface, nam
 	return providerList, nil
 }
 
-func (kef *createVolumeFromSnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+func addPVProvisionedByAnnotation(annotations map[string]string, provider blockstorage.Provider) map[string]string {
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+
+	storageType := provider.Type()
+	switch storageType {
+	case blockstorage.TypeGPD:
+		annotations[consts.PVProvisionedByAnnotation] = consts.GCEPDProvisionerInTree
+	case blockstorage.TypeEBS:
+		annotations[consts.PVProvisionedByAnnotation] = consts.AWSEBSProvisionerInTree
+	}
+
+	return annotations
+}
+
+func (c *createVolumeFromSnapshotFunc) Exec(ctx context.Context, tp param.TemplateParams, args map[string]interface{}) (map[string]interface{}, error) {
+	// Set progress percent
+	c.progressPercent = progress.StartedPercent
+	defer func() { c.progressPercent = progress.CompletedPercent }()
+
 	cli, err := kube.NewClient()
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to create Kubernetes client")
+		return nil, errkit.Wrap(err, "Failed to create Kubernetes client")
 	}
 	var namespace, snapshotinfo string
 	var pvcNames []string
@@ -153,4 +182,20 @@ func (*createVolumeFromSnapshotFunc) Arguments() []string {
 		CreateVolumeFromSnapshotManifestArg,
 		CreateVolumeFromSnapshotPVCNamesArg,
 	}
+}
+
+func (c *createVolumeFromSnapshotFunc) Validate(args map[string]any) error {
+	if err := utils.CheckSupportedArgs(c.Arguments(), args); err != nil {
+		return err
+	}
+
+	return utils.CheckRequiredArgs(c.RequiredArgs(), args)
+}
+
+func (crs *createVolumeFromSnapshotFunc) ExecutionProgress() (crv1alpha1.PhaseProgress, error) {
+	metav1Time := metav1.NewTime(time.Now())
+	return crv1alpha1.PhaseProgress{
+		ProgressPercent:    crs.progressPercent,
+		LastTransitionTime: &metav1Time,
+	}, nil
 }

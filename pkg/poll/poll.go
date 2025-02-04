@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/jpillora/backoff"
-	"github.com/pkg/errors"
+	"github.com/kanisterio/errkit"
 )
 
 // Func returns true if the condition is satisfied, or an error if the loop
@@ -42,10 +42,11 @@ func IsNeverRetryable(error) bool {
 
 // Wait calls WaitWithBackoff with default backoff parameters. The defaults are
 // handled by the "github.com/jpillora/backoff" and are:
-//   min = 100 * time.Millisecond
-//   max = 10 * time.Second
-//   factor = 2
-//   jitter = false
+//
+//	min = 100 * time.Millisecond
+//	max = 10 * time.Second
+//	factor = 2
+//	jitter = false
 func Wait(ctx context.Context, f Func) error {
 	return WaitWithBackoff(ctx, backoff.Backoff{}, f)
 }
@@ -70,7 +71,7 @@ func WaitWithRetries(ctx context.Context, numRetries int, r IsRetryableFunc, f F
 // parameters `b`.
 func WaitWithBackoffWithRetries(ctx context.Context, b backoff.Backoff, numRetries int, r IsRetryableFunc, f Func) error {
 	if numRetries < 0 {
-		return errors.New("numRetries must be non-negative")
+		return errkit.New("numRetries must be non-negative")
 	}
 
 	t := time.NewTimer(0)
@@ -90,20 +91,16 @@ func WaitWithBackoffWithRetries(ctx context.Context, b backoff.Backoff, numRetri
 		sleep := b.Duration()
 		if deadline, ok := ctx.Deadline(); ok {
 			ctxSleep := time.Until(deadline)
-			sleep = minDuration(sleep, ctxSleep)
+			// We want to wait for smaller of backoff sleep and context sleep
+			// but it has to be > 0 to give ctx.Done() a chance
+			// to return below
+			sleep = max(min(sleep, ctxSleep), 5*time.Millisecond)
 		}
 		t.Reset(sleep)
 		select {
 		case <-ctx.Done():
-			return errors.Wrap(ctx.Err(), "Context done while polling")
+			return errkit.Wrap(ctx.Err(), "Context done while polling")
 		case <-t.C:
 		}
 	}
-}
-
-func minDuration(a, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
 }

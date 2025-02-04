@@ -18,19 +18,19 @@
 package testing
 
 import (
-	. "gopkg.in/check.v1"
+	"gopkg.in/check.v1"
 
 	"github.com/kanisterio/kanister/pkg/app"
 )
 
 // Register Applications to Integration Suite
 
-// pitr-postgresql app
+// PITRPostgreSQL type is an app for postgres database for integration test.
 type PITRPostgreSQL struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&PITRPostgreSQL{
+var _ = check.Suite(&PITRPostgreSQL{
 	IntegrationSuite{
 		name:      "pitr-postgres",
 		namespace: "pitr-postgres-test",
@@ -40,12 +40,12 @@ var _ = Suite(&PITRPostgreSQL{
 	},
 })
 
-// postgres app
+// PostgreSQL type is an app for postgres database for integration test.
 type PostgreSQL struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&PostgreSQL{
+var _ = check.Suite(&PostgreSQL{
 	IntegrationSuite{
 		name:      "postgres",
 		namespace: "postgres-test",
@@ -55,12 +55,12 @@ var _ = Suite(&PostgreSQL{
 	},
 })
 
-// mysql app
+// MySQL type is an app for mysql database for integration test.
 type MySQL struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MySQL{
+var _ = check.Suite(&MySQL{
 	IntegrationSuite{
 		name:      "mysql",
 		namespace: "mysql-test",
@@ -70,12 +70,27 @@ var _ = Suite(&MySQL{
 	},
 })
 
-// time-log app for csi volumesnapshot
+// CockroachDB type is an app for cockroach DB for integration test.
+type CockroachDB struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&CockroachDB{
+	IntegrationSuite{
+		name:      "cockroachdb",
+		namespace: "cockroachdb-test",
+		app:       app.NewCockroachDB("cockroachdb"),
+		bp:        app.NewBlueprint("cockroachdb", "", false),
+		profile:   newSecretProfile(),
+	},
+})
+
+// TimeLogCSI type is an app for csi volumesnapshot for integration test.
 type TimeLogCSI struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&TimeLogCSI{
+var _ = check.Suite(&TimeLogCSI{
 	IntegrationSuite{
 		name:      "time-logger",
 		namespace: "time-log",
@@ -85,12 +100,12 @@ var _ = Suite(&TimeLogCSI{
 	},
 })
 
-// mariaDB app
+// Maria type is an app for maria DB for integration test.
 type Maria struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&Maria{
+var _ = check.Suite(&Maria{
 	IntegrationSuite{
 		name:      "mariadb",
 		namespace: "mariadb-test",
@@ -100,12 +115,12 @@ var _ = Suite(&Maria{
 	},
 })
 
-// Elasticsearch app
+// Elasticsearch type is an app for elasticsearch for integration test.
 type Elasticsearch struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&Elasticsearch{
+var _ = check.Suite(&Elasticsearch{
 	IntegrationSuite{
 		name:      "elasticsearch",
 		namespace: "es-test",
@@ -115,12 +130,12 @@ var _ = Suite(&Elasticsearch{
 	},
 })
 
-// MongoDB app
+// MongoDB type is an app for mongo DB for integration test.
 type MongoDB struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MongoDB{
+var _ = check.Suite(&MongoDB{
 	IntegrationSuite{
 		name:      "mongo",
 		namespace: "mongo-test",
@@ -130,12 +145,12 @@ var _ = Suite(&MongoDB{
 	},
 })
 
-// Cassandra App
+// Cassandra type is an app for cassandra DB for integration test.
 type Cassandra struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&Cassandra{IntegrationSuite{
+var _ = check.Suite(&Cassandra{IntegrationSuite{
 	name:      "cassandra",
 	namespace: "cassandra-test",
 	app:       app.NewCassandraInstance("cassandra"),
@@ -144,12 +159,12 @@ var _ = Suite(&Cassandra{IntegrationSuite{
 },
 })
 
-// Couchbase app
+// Couchbase type is an app for couchbase DB for integration test.
 type Couchbase struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&Couchbase{
+var _ = check.Suite(&Couchbase{
 	IntegrationSuite{
 		name:      "couchbase",
 		namespace: "couchbase-test",
@@ -159,12 +174,12 @@ var _ = Suite(&Couchbase{
 	},
 })
 
-// rds-postgres app
+// RDSPostgreSQL type is an app for postgres database for integration test.
 type RDSPostgreSQL struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&RDSPostgreSQL{
+var _ = check.Suite(&RDSPostgreSQL{
 	IntegrationSuite{
 		name:      "rds-postgres",
 		namespace: "rds-postgres-test",
@@ -174,11 +189,12 @@ var _ = Suite(&RDSPostgreSQL{
 	},
 })
 
+// FoundationDB type is an app for foundation database for integration test.
 type FoundationDB struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&FoundationDB{
+var _ = check.Suite(&FoundationDB{
 	IntegrationSuite{
 		name:      "foundationdb",
 		namespace: "fdb-test",
@@ -188,11 +204,12 @@ var _ = Suite(&FoundationDB{
 	},
 })
 
+// RDSAuroraMySQL type is an app for mysql database for integration test.
 type RDSAuroraMySQL struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&RDSAuroraMySQL{
+var _ = check.Suite(&RDSAuroraMySQL{
 	IntegrationSuite{
 		name:      "rds-aurora-mysql",
 		namespace: "rds-aurora-mysql-test",
@@ -202,13 +219,13 @@ var _ = Suite(&RDSAuroraMySQL{
 	},
 })
 
-// rds-postgres-dump app
-// Create snapshot, export data and restore from dump
+// RDSPostgreSQLDump type is an app for postgres dump for integration test.
+// It creates snapshot, export data and restore from dump.
 type RDSPostgreSQLDump struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&RDSPostgreSQLDump{
+var _ = check.Suite(&RDSPostgreSQLDump{
 	IntegrationSuite{
 		name:      "rds-postgres-dump",
 		namespace: "rds-postgres-dump-test",
@@ -218,13 +235,13 @@ var _ = Suite(&RDSPostgreSQLDump{
 	},
 })
 
-// rds-postgres-snap app
-// Create snapshot and restore from snapshot
+// RDSPostgreSQLSnap type is an app for postgres snap for integration test.
+// It creates snapshot and restore from snapshot.
 type RDSPostgreSQLSnap struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&RDSPostgreSQLSnap{
+var _ = check.Suite(&RDSPostgreSQLSnap{
 	IntegrationSuite{
 		name:      "rds-postgres-snap",
 		namespace: "rds-postgres-snap-test",
@@ -234,11 +251,12 @@ var _ = Suite(&RDSPostgreSQLSnap{
 	},
 })
 
+// MSSQL type is an app for mssql database for integration test.
 type MSSQL struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MSSQL{
+var _ = check.Suite(&MSSQL{
 	IntegrationSuite{
 		name:      "mssql",
 		namespace: "mssql-test",
@@ -248,13 +266,13 @@ var _ = Suite(&MSSQL{
 	},
 })
 
-// OpenShift apps for version 3.11
-// Mysql Instance that is deployed through DeploymentConfig on OpenShift cluster
+// MysqlDBDepConfig type is an app for mysql database for integration test that is deployed through DeploymentConfig on OpenShift cluster.
+// OpenShifts apps for version 3.11.
 type MysqlDBDepConfig struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MysqlDBDepConfig{
+var _ = check.Suite(&MysqlDBDepConfig{
 	IntegrationSuite{
 		name:      "mysqldc",
 		namespace: "mysqldc-test",
@@ -264,12 +282,12 @@ var _ = Suite(&MysqlDBDepConfig{
 	},
 })
 
-// MongoDB deployed on openshift cluster
+// MongoDBDepConfig type is an app for mongo DB for integration test on openshift cluster
 type MongoDBDepConfig struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MongoDBDepConfig{
+var _ = check.Suite(&MongoDBDepConfig{
 	IntegrationSuite{
 		name:      "mongodb",
 		namespace: "mongodb-test",
@@ -279,12 +297,12 @@ var _ = Suite(&MongoDBDepConfig{
 	},
 })
 
-// PostgreSQL deployed on openshift cluster
+// PostgreSQLDepConfig type is an app for postgresdepconf for integration test on openshift cluster.
 type PostgreSQLDepConfig struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&PostgreSQLDepConfig{
+var _ = check.Suite(&PostgreSQLDepConfig{
 	IntegrationSuite{
 		name:      "postgresdepconf",
 		namespace: "postgresdepconf-test",
@@ -294,13 +312,13 @@ var _ = Suite(&PostgreSQLDepConfig{
 	},
 })
 
+// MysqlDBDepConfig4_4 type is an app for mysql database for integration test through DeploymentConfig on OpenShift cluster.
 // OpenShift apps for version 4.4
-// Mysql Instance that is deployed through DeploymentConfig on OpenShift cluster
 type MysqlDBDepConfig4_4 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MysqlDBDepConfig4_4{
+var _ = check.Suite(&MysqlDBDepConfig4_4{
 	IntegrationSuite{
 		name:      "mysqldc",
 		namespace: "mysqldc4-4-test",
@@ -310,12 +328,12 @@ var _ = Suite(&MysqlDBDepConfig4_4{
 	},
 })
 
-// MongoDB deployed on openshift cluster
+// MongoDBDepConfig4_4 type is an app for mongo database for integration test on openshift cluster
 type MongoDBDepConfig4_4 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MongoDBDepConfig4_4{
+var _ = check.Suite(&MongoDBDepConfig4_4{
 	IntegrationSuite{
 		name:      "mongodb",
 		namespace: "mongodb4-4-test",
@@ -325,12 +343,12 @@ var _ = Suite(&MongoDBDepConfig4_4{
 	},
 })
 
-// PostgreSQL deployed on openshift cluster
+// PostgreSQLDepConfig4_4 type is an app for postgres database for integration test on openshift cluster
 type PostgreSQLDepConfig4_4 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&PostgreSQLDepConfig4_4{
+var _ = check.Suite(&PostgreSQLDepConfig4_4{
 	IntegrationSuite{
 		name:      "postgresdepconf",
 		namespace: "postgresdepconf4-4-test",
@@ -340,13 +358,13 @@ var _ = Suite(&PostgreSQLDepConfig4_4{
 	},
 })
 
+// MysqlDBDepConfig4_5 type is an app for mysql database for integration test through DeploymentConfig on OpenShift cluster.
 // OpenShift apps for version 4.5
-// Mysql Instance that is deployed through DeploymentConfig on OpenShift cluster
 type MysqlDBDepConfig4_5 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MysqlDBDepConfig4_5{
+var _ = check.Suite(&MysqlDBDepConfig4_5{
 	IntegrationSuite{
 		name:      "mysqldc",
 		namespace: "mysqldc4-5-test",
@@ -356,12 +374,12 @@ var _ = Suite(&MysqlDBDepConfig4_5{
 	},
 })
 
-// MongoDB deployed on openshift cluster
+// MongoDBDepConfig4_5 type is an app for mongo database for integration test on OpenShift cluster
 type MongoDBDepConfig4_5 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MongoDBDepConfig4_5{
+var _ = check.Suite(&MongoDBDepConfig4_5{
 	IntegrationSuite{
 		name:      "mongodb",
 		namespace: "mongodb4-5-test",
@@ -371,12 +389,12 @@ var _ = Suite(&MongoDBDepConfig4_5{
 	},
 })
 
-// PostgreSQL deployed on openshift cluster
+// PostgreSQLDepConfig4_5 type is an app for postgres database for integration test on OpenShift cluster
 type PostgreSQLDepConfig4_5 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&PostgreSQLDepConfig4_5{
+var _ = check.Suite(&PostgreSQLDepConfig4_5{
 	IntegrationSuite{
 		name:      "postgresdepconf",
 		namespace: "postgresdepconf4-5-test",
@@ -386,12 +404,12 @@ var _ = Suite(&PostgreSQLDepConfig4_5{
 	},
 })
 
-// Kafka deployed on kubernetes cluster
+// Kafka type is an app for kafka for integration test on kubernetes cluster
 type Kafka struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&Kafka{
+var _ = check.Suite(&Kafka{
 	IntegrationSuite{
 		name:      "kafka",
 		namespace: "kafka-test",
@@ -401,46 +419,166 @@ var _ = Suite(&Kafka{
 	},
 })
 
-// Mysql Instance that is deployed through DeploymentConfig on OpenShift cluster
-type MysqlDBDepConfig4_9 struct {
+// MysqlDBDepConfig4_10 type is an app for mysql database for integration test on OpenShift cluster
+type MysqlDBDepConfig4_10 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MysqlDBDepConfig4_9{
+var _ = check.Suite(&MysqlDBDepConfig4_10{
 	IntegrationSuite{
 		name:      "mysqldc",
-		namespace: "mysqldc4-9-test",
-		app:       app.NewMysqlDepConfig("mysqldeploymentconfig", app.TemplateVersionOCP4_9, app.EphemeralStorage, "8.0"),
+		namespace: "mysqldc4-10-test",
+		app:       app.NewMysqlDepConfig("mysqldeploymentconfig", app.TemplateVersionOCP4_10, app.EphemeralStorage, "8.0"),
 		bp:        app.NewBlueprint("mysql-dep-config", "", true),
 		profile:   newSecretProfile(),
 	},
 })
 
-// MongoDB deployed on openshift cluster
-type MongoDBDepConfig4_9 struct {
+// MongoDBDepConfig4_10 type is an app for mongo database for integration test on OpenShift cluster
+type MongoDBDepConfig4_10 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&MongoDBDepConfig4_9{
+var _ = check.Suite(&MongoDBDepConfig4_10{
 	IntegrationSuite{
 		name:      "mongodb",
-		namespace: "mongodb4-9-test",
-		app:       app.NewMongoDBDepConfig("mongodeploymentconfig", app.TemplateVersionOCP4_9, app.EphemeralStorage),
+		namespace: "mongodb4-10-test",
+		app:       app.NewMongoDBDepConfig("mongodeploymentconfig", app.TemplateVersionOCP4_10, app.EphemeralStorage),
 		bp:        app.NewBlueprint("mongo-dep-config", "", true),
 		profile:   newSecretProfile(),
 	},
 })
 
-// PostgreSQL deployed on openshift cluster
-type PostgreSQLDepConfig4_9 struct {
+// PostgreSQLDepConfig4_10 type is an app for postgres database for integration test on OpenShift cluster
+type PostgreSQLDepConfig4_10 struct {
 	IntegrationSuite
 }
 
-var _ = Suite(&PostgreSQLDepConfig4_9{
+var _ = check.Suite(&PostgreSQLDepConfig4_10{
 	IntegrationSuite{
 		name:      "postgresdepconf",
-		namespace: "postgresdepconf4-5-test",
-		app:       app.NewPostgreSQLDepConfig("postgresdepconf", app.TemplateVersionOCP4_9, app.EphemeralStorage),
+		namespace: "postgresdepconf4-10-test",
+		app:       app.NewPostgreSQLDepConfig("postgresdepconf", app.TemplateVersionOCP4_10, app.EphemeralStorage),
+		bp:        app.NewBlueprint("postgres-dep-config", "", true),
+		profile:   newSecretProfile(),
+	},
+})
+
+// MysqlDBDepConfig4_11 type is an app for mysql database for integration test through DeploymentConfig on OpenShift cluster
+type MysqlDBDepConfig4_11 struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&MysqlDBDepConfig4_11{
+	IntegrationSuite{
+		name:      "mysqldc",
+		namespace: "mysqldc4-11-test",
+		app:       app.NewMysqlDepConfig("mysqldeploymentconfig", app.TemplateVersionOCP4_11, app.EphemeralStorage, "8.0"),
+		bp:        app.NewBlueprint("mysql-dep-config", "", true),
+		profile:   newSecretProfile(),
+	},
+})
+
+// PostgreSQLDepConfig4_11 type is an app for postgres database for integration test on openshift cluster
+type PostgreSQLDepConfig4_11 struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&PostgreSQLDepConfig4_11{
+	IntegrationSuite{
+		name:      "postgresdepconf",
+		namespace: "postgresdepconf4-11-test",
+		app:       app.NewPostgreSQLDepConfig("postgresdepconf", app.TemplateVersionOCP4_11, app.EphemeralStorage),
+		bp:        app.NewBlueprint("postgres-dep-config", "", true),
+		profile:   newSecretProfile(),
+	},
+})
+
+// MysqlDBDepConfig4_12 type is an app for mysql database for integration test on openshift cluster
+type MysqlDBDepConfig4_12 struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&MysqlDBDepConfig4_12{
+	IntegrationSuite{
+		name:      "mysqldc",
+		namespace: "mysqldc4-12-test",
+		app:       app.NewMysqlDepConfig("mysqldeploymentconfig", app.TemplateVersionOCP4_12, app.EphemeralStorage, "8.0"),
+		bp:        app.NewBlueprint("mysql-dep-config", "", true),
+		profile:   newSecretProfile(),
+	},
+})
+
+// PostgreSQLDepConfig4_12 type is an app for postgres database for integration test on openshift cluster
+type PostgreSQLDepConfig4_12 struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&PostgreSQLDepConfig4_12{
+	IntegrationSuite{
+		name:      "postgresdepconf",
+		namespace: "postgresdepconf4-12-test",
+		app:       app.NewPostgreSQLDepConfig("postgresdepconf", app.TemplateVersionOCP4_12, app.EphemeralStorage),
+		bp:        app.NewBlueprint("postgres-dep-config", "", true),
+		profile:   newSecretProfile(),
+	},
+})
+
+// MysqlDBDepConfig4_13 type is an app for mysql database for integration test on openshift cluster
+type MysqlDBDepConfig4_13 struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&MysqlDBDepConfig4_13{
+	IntegrationSuite{
+		name:      "mysqldc",
+		namespace: "mysqldc4-13-test",
+		app:       app.NewMysqlDepConfig("mysqldeploymentconfig", app.TemplateVersionOCP4_13, app.EphemeralStorage, "8.0"),
+		bp:        app.NewBlueprint("mysql-dep-config", "", true),
+		profile:   newSecretProfile(),
+	},
+})
+
+// PostgreSQLDepConfig4_13 type is an app for postgres database for integration test on openshift cluster
+type PostgreSQLDepConfig4_13 struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&PostgreSQLDepConfig4_13{
+	IntegrationSuite{
+		name:      "postgresdepconf",
+		namespace: "postgresdepconf4-13-test",
+		app:       app.NewPostgreSQLDepConfig("postgresdepconf", app.TemplateVersionOCP4_13, app.EphemeralStorage),
+		bp:        app.NewBlueprint("postgres-dep-config", "", true),
+		profile:   newSecretProfile(),
+	},
+})
+
+// MysqlDBDepConfig4_14 type is an app for mysql database for integration test on openshift cluster
+type MysqlDBDepConfig4_14 struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&MysqlDBDepConfig4_14{
+	IntegrationSuite{
+		name:      "mysqldc",
+		namespace: "mysqldc4-14-test",
+		app:       app.NewMysqlDepConfig("mysqldeploymentconfig", app.TemplateVersionOCP4_14, app.EphemeralStorage, "8.0"),
+		bp:        app.NewBlueprint("mysql-dep-config", "", true),
+		profile:   newSecretProfile(),
+	},
+})
+
+// PostgreSQLDepConfig4_14 type is an app for postgres database for integration test on openshift cluster
+type PostgreSQLDepConfig4_14 struct {
+	IntegrationSuite
+}
+
+var _ = check.Suite(&PostgreSQLDepConfig4_14{
+	IntegrationSuite{
+		name:      "postgresdepconf",
+		namespace: "postgresdepconf4-14-test",
+		app:       app.NewPostgreSQLDepConfig("postgresdepconf", app.TemplateVersionOCP4_14, app.EphemeralStorage),
 		bp:        app.NewBlueprint("postgres-dep-config", "", true),
 		profile:   newSecretProfile(),
 	},

@@ -22,11 +22,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
-	v1 "k8s.io/api/core/v1"
+	"github.com/kanisterio/errkit"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
@@ -42,32 +43,44 @@ const (
 	// NoPVCNameSpecified is used by the caller to indicate that the PVC name
 	// should be auto-generated
 	NoPVCNameSpecified = ""
+
+	RegionZoneSeparator = "__"
 )
 
 // CreatePVC creates a PersistentVolumeClaim and returns its name
 // An empty 'targetVolID' indicates the caller would like the PV to be dynamically provisioned
 // An empty 'name' indicates the caller would like the name to be auto-generated
 // An error indicating that the PVC already exists is ignored (for idempotency)
-func CreatePVC(ctx context.Context, kubeCli kubernetes.Interface, ns string, name string, sizeInBytes int64, targetVolID string, annotations map[string]string, accessmodes []v1.PersistentVolumeAccessMode, volumemode *v1.PersistentVolumeMode) (string, error) {
+func CreatePVC(
+	ctx context.Context,
+	kubeCli kubernetes.Interface,
+	ns,
+	name string,
+	sizeInBytes int64,
+	targetVolID string,
+	annotations map[string]string,
+	accessmodes []corev1.PersistentVolumeAccessMode,
+	volumemode *corev1.PersistentVolumeMode,
+) (string, error) {
 	sizeFmt := fmt.Sprintf("%d", sizeInBytes)
 	size, err := resource.ParseQuantity(sizeFmt)
 	emptyStorageClass := ""
 	if err != nil {
-		return "", errors.Wrapf(err, "Unable to parse sizeFmt %s", sizeFmt)
+		return "", errkit.Wrap(err, "Unable to parse sizeFmt", "sizeFmt", sizeFmt)
 	}
 	if len(accessmodes) == 0 {
-		accessmodes = []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce}
+		accessmodes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 	}
-	pvc := v1.PersistentVolumeClaim{
+	pvc := corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: annotations,
 		},
-		Spec: v1.PersistentVolumeClaimSpec{
+		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: accessmodes,
 			VolumeMode:  volumemode,
-			Resources: v1.ResourceRequirements{
-				Requests: v1.ResourceList{
-					v1.ResourceName(v1.ResourceStorage): size,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceName(corev1.ResourceStorage): size,
 				},
 			},
 		},
@@ -91,7 +104,7 @@ func CreatePVC(ctx context.Context, kubeCli kubernetes.Interface, ns string, nam
 		if name != "" && apierrors.IsAlreadyExists(err) {
 			return name, nil
 		}
-		return "", errors.Wrapf(err, "Unable to create PVC %v", pvc)
+		return "", errkit.Wrap(err, "Unable to create PVC", "pvc", pvc)
 	}
 	return createdPVC.Name, nil
 }
@@ -103,6 +116,7 @@ func CreatePVC(ctx context.Context, kubeCli kubernetes.Interface, ns string, nam
 // 'Namespace' is the namespace of the VolumeSnapshot. The PVC will be restored to the same namepsace.
 // 'RestoreSize' will override existing restore size from snapshot content if provided.
 // 'Labels' will be added to the PVC.
+// 'Annotations' will be added to the PVC.
 type CreatePVCFromSnapshotArgs struct {
 	KubeCli          kubernetes.Interface
 	DynCli           dynamic.Interface
@@ -112,8 +126,10 @@ type CreatePVCFromSnapshotArgs struct {
 	SnapshotName     string
 	RestoreSize      string
 	Labels           map[string]string
-	VolumeMode       *v1.PersistentVolumeMode
-	AccessModes      []v1.PersistentVolumeAccessMode
+	Annotations      map[string]string
+	VolumeMode       *corev1.PersistentVolumeMode
+	AccessModes      []corev1.PersistentVolumeAccessMode
+	GroupVersion     schema.GroupVersion
 }
 
 // CreatePVCFromSnapshot will restore a volume and returns the resulting
@@ -121,29 +137,39 @@ type CreatePVCFromSnapshotArgs struct {
 func CreatePVCFromSnapshot(ctx context.Context, args *CreatePVCFromSnapshotArgs) (string, error) {
 	storageSize, err := getPVCRestoreSize(ctx, args)
 	if err != nil {
-		return "", errors.Wrap(err, "Failed to get PVC restore size")
+		return "", errkit.Wrap(err, "Failed to get PVC restore size")
 	}
 
 	if len(args.AccessModes) == 0 {
-		args.AccessModes = []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce}
+		args.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 	}
 	snapshotKind := "VolumeSnapshot"
+
+	// Group version is not specified here, it is figured out automatically
+	// while the PVC is being created, which can cause issues. Hence we should explicitly
+	// check if group api version is passed in the args, and use that
+	// to create the PVC
 	snapshotAPIGroup := "snapshot.storage.k8s.io"
-	pvc := &v1.PersistentVolumeClaim{
+	if !args.GroupVersion.Empty() {
+		snapshotAPIGroup = args.GroupVersion.String()
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Labels: args.Labels,
+			Labels:      args.Labels,
+			Annotations: args.Annotations,
 		},
-		Spec: v1.PersistentVolumeClaimSpec{
+		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: args.AccessModes,
 			VolumeMode:  args.VolumeMode,
-			DataSource: &v1.TypedLocalObjectReference{
+			DataSource: &corev1.TypedLocalObjectReference{
 				APIGroup: &snapshotAPIGroup,
 				Kind:     snapshotKind,
 				Name:     args.SnapshotName,
 			},
-			Resources: v1.ResourceRequirements{
-				Requests: v1.ResourceList{
-					v1.ResourceStorage: *storageSize,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: *storageSize,
 				},
 			},
 		},
@@ -162,7 +188,7 @@ func CreatePVCFromSnapshot(ctx context.Context, args *CreatePVCFromSnapshotArgs)
 		if args.VolumeName != "" && apierrors.IsAlreadyExists(err) {
 			return args.VolumeName, nil
 		}
-		return "", errors.Wrapf(err, "Unable to create PVC, PVC: %v", pvc)
+		return "", errkit.Wrap(err, "Unable to create PVC", "pvc", pvc)
 	}
 	return pvc.Name, err
 }
@@ -173,25 +199,22 @@ func getPVCRestoreSize(ctx context.Context, args *CreatePVCFromSnapshotArgs) (*r
 	if args.RestoreSize != "" {
 		s, err := resource.ParseQuantity(args.RestoreSize)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to parse quantity (%s)", args.RestoreSize)
+			return nil, errkit.New("Failed to parse quantity", "restoreSize", args.RestoreSize)
 		}
 		quantities = append(quantities, &s)
 	}
 
-	sns, err := snapshot.NewSnapshotter(args.KubeCli, args.DynCli)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get snapshotter")
-	}
+	sns := snapshot.NewSnapshotter(args.KubeCli, args.DynCli)
 	snap, err := sns.Get(ctx, args.SnapshotName, args.Namespace)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get snapshot")
+		return nil, errkit.Wrap(err, "Failed to get snapshot")
 	}
 	if snap.Status != nil && snap.Status.RestoreSize != nil {
 		quantities = append(quantities, snap.Status.RestoreSize)
 	}
 
 	if len(quantities) == 0 {
-		return nil, fmt.Errorf("Restore size is empty and no restore size argument given, Volumesnapshot: %s", args.SnapshotName)
+		return nil, errkit.New("Restore size is empty and no restore size argument given", "volumeSnapshot", args.SnapshotName)
 	}
 
 	quantity := quantities[0]
@@ -205,11 +228,19 @@ func getPVCRestoreSize(ctx context.Context, args *CreatePVCFromSnapshotArgs) (*r
 
 // CreatePV creates a PersistentVolume and returns its name
 // For retry idempotency, checks whether PV associated with volume already exists
-func CreatePV(ctx context.Context, kubeCli kubernetes.Interface, vol *blockstorage.Volume, volType blockstorage.Type, annotations map[string]string, accessmodes []v1.PersistentVolumeAccessMode, volumemode *v1.PersistentVolumeMode) (string, error) {
+func CreatePV(
+	ctx context.Context,
+	kubeCli kubernetes.Interface,
+	vol *blockstorage.Volume,
+	volType blockstorage.Type,
+	annotations map[string]string,
+	accessmodes []corev1.PersistentVolumeAccessMode,
+	volumemode *corev1.PersistentVolumeMode,
+) (string, error) {
 	sizeFmt := fmt.Sprintf("%d", vol.SizeInBytes)
 	size, err := resource.ParseQuantity(sizeFmt)
 	if err != nil {
-		return "", errors.Wrapf(err, "Unable to parse sizeFmt %s", sizeFmt)
+		return "", errkit.Wrap(err, "Unable to parse sizeFmt", "sizeFmt", sizeFmt)
 	}
 	matchLabels := map[string]string{pvMatchLabelName: filepath.Base(vol.ID)}
 
@@ -222,45 +253,45 @@ func CreatePV(ctx context.Context, kubeCli kubernetes.Interface, vol *blockstora
 	}
 
 	if len(accessmodes) == 0 {
-		accessmodes = []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce}
+		accessmodes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 	}
 
-	pv := v1.PersistentVolume{
+	pv := corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "kanister-pv-",
 			Labels:       matchLabels,
 			Annotations:  annotations,
 		},
-		Spec: v1.PersistentVolumeSpec{
-			Capacity: v1.ResourceList{
-				v1.ResourceName(v1.ResourceStorage): size,
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity: corev1.ResourceList{
+				corev1.ResourceName(corev1.ResourceStorage): size,
 			},
 			AccessModes:                   accessmodes,
 			VolumeMode:                    volumemode,
-			PersistentVolumeReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
 		},
 	}
 	switch volType {
 	case blockstorage.TypeEBS:
-		pv.Spec.PersistentVolumeSource.AWSElasticBlockStore = &v1.AWSElasticBlockStoreVolumeSource{
+		pv.Spec.PersistentVolumeSource.AWSElasticBlockStore = &corev1.AWSElasticBlockStoreVolumeSource{
 			VolumeID: vol.ID,
 		}
-		pv.ObjectMeta.Labels[kube.FDZoneLabelName] = vol.Az
-		pv.ObjectMeta.Labels[kube.FDRegionLabelName] = zoneToRegion(vol.Az)
+		pv.ObjectMeta.Labels[kube.TopologyZoneLabelName] = vol.Az
+		pv.ObjectMeta.Labels[kube.TopologyRegionLabelName] = zoneToRegion(vol.Az)
 	case blockstorage.TypeGPD:
-		pv.Spec.PersistentVolumeSource.GCEPersistentDisk = &v1.GCEPersistentDiskVolumeSource{
+		pv.Spec.PersistentVolumeSource.GCEPersistentDisk = &corev1.GCEPersistentDiskVolumeSource{
 			PDName: vol.ID,
 		}
-		pv.ObjectMeta.Labels[kube.FDZoneLabelName] = vol.Az
-		pv.ObjectMeta.Labels[kube.FDRegionLabelName] = zoneToRegion(vol.Az)
+		pv.ObjectMeta.Labels[kube.TopologyZoneLabelName] = vol.Az
+		pv.ObjectMeta.Labels[kube.TopologyRegionLabelName] = zoneToRegion(vol.Az)
 
 	default:
-		return "", errors.Errorf("Volume type %v(%T) not supported ", volType, volType)
+		return "", errkit.New("Volume type not supported", "volumeType", volType, "type", fmt.Sprintf("%T", volType))
 	}
 
 	createdPV, err := kubeCli.CoreV1().PersistentVolumes().Create(ctx, &pv, metav1.CreateOptions{})
 	if err != nil {
-		return "", errors.Wrapf(err, "Unable to create PV for volume %v", pv)
+		return "", errkit.Wrap(err, "Unable to create PV for volume", "pv", pv)
 	}
 	return createdPV.Name, nil
 }
@@ -304,8 +335,26 @@ func labelSelector(labels map[string]string) string {
 	return strings.Join(ls, ",")
 }
 
-// zoneToRegion removes -latter or just last latter from provided zone.
+// zoneToRegion figures out region from a zone and to do that it
+// just removes `-[onchar]` from the end of zone.
 func zoneToRegion(zone string) string {
-	r, _ := regexp.Compile("-?[a-z]$")
-	return r.ReplaceAllString(zone, "")
+	// zone can have multiple zone separate by `__` that's why first call
+	// zonesToRegions to get region for every zone and then return back
+	// by appending every region with `__` separator
+	return strings.Join(zonesToRegions(zone), RegionZoneSeparator)
+}
+
+func zonesToRegions(zone string) []string {
+	reg := map[string]bool{}
+	var regions []string
+	r := regexp.MustCompile("-?[a-z]$")
+	for _, z := range strings.Split(zone, RegionZoneSeparator) {
+		zone = r.ReplaceAllString(z, "")
+		if _, ok := reg[zone]; !ok {
+			reg[zone] = true
+			regions = append(regions, zone)
+		}
+	}
+
+	return regions
 }
